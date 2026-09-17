@@ -110,7 +110,86 @@ Use the institution's encrypted backup service rather than storing dumps in the 
 
 Enable provider versioning or replication as approved. Back up object metadata through PostgreSQL and verify that every referenced key exists. Test restoring a representative image and PDF, including MIME metadata, title, alt text and status. Do not copy production objects into a developer-owned account.
 
-## Release checklist
+## Local production smoke test (Codespaces, dev boxes, disposable VMs)
+
+### Why the server requires the full variable set at startup, even for a partial smoke
+
+`instrumentation.ts` runs `assertProductionConfig()` once when the Node.js server starts (the App Router instrumentation hook). This is intentional and is the operational layer of the fail-closed design; the per-request checks (`getSession`, `getSiteData`, the storage adapter) remain in place independently.
+
+- It validates **presence and format only**: every required variable non-empty, `AUTH_SECRET` at least 32 characters in production, `NEXT_PUBLIC_SITE_URL` a valid `https://` URL. It never connects to PostgreSQL or object storage, so startup is cheap.
+- It is **all-or-nothing by design**: in production mode the application has no fallback paths (demo auth, the file-backed content store and the local upload adapter are development-only). Every request class the server may receive needs a subsystem — public content needs the database, sessions need the signing secret, uploads and media delivery need storage. A partially configured production server would serve some routes and 500 on others, which is strictly worse than refusing to boot. So the complete set is required even when the smoke only exercises a subset (e.g. only `/admin/login` and the `/admin` redirect).
+- **Reachability is enforced on first use, not at startup**: with a syntactically valid but unreachable `DATABASE_URL`, the server starts, but the first public page request fails closed with a database error. The same applies to storage on the first upload or media delivery.
+- The only legitimate way to run with fewer variables is a **non-production** server (`next dev`), where none of these checks apply.
+
+### Required variables for `npm run start` (production mode)
+
+| Variable | Rule at startup | Purpose |
+|---|---|---|
+| `DATABASE_URL` | required, non-empty | PostgreSQL connection string. All content, users, sessions, audit and rate-limit buckets are database-backed in production. Must point to an **actually reachable** database for any content-serving smoke. |
+| `AUTH_SECRET` | required, ≥ 32 characters in production | HS256 signing key for session JWTs. Generate locally with `openssl rand -hex 32`. Never commit it. |
+| `NEXT_PUBLIC_SITE_URL` | required, valid `https://` URL in production | Canonical site URL (metadata base, Open Graph, JSON-LD). Use the smoke environment's HTTPS URL (e.g. the Codespace preview URL). Note: the client-side JSON-LD usage is inlined at build time, so its value only changes on rebuild — cosmetic. |
+| `STORAGE_ENDPOINT` | required, non-empty | S3-compatible endpoint. |
+| `STORAGE_BUCKET` | required, non-empty | Bucket name for media/document objects. |
+| `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` | required, non-empty | Object-storage credentials for a real compatible service when the smoke includes uploads or media delivery; presence-only when it does not. |
+| `STORAGE_FORCE_PATH_STYLE` | optional (`false`) | Set `true` for path-style S3 emulators such as MinIO. |
+| `STORAGE_REGION` | optional (`auto`) | e.g. `us-east-1` for MinIO. |
+| `STORAGE_PUBLIC_BASE_URL` | optional | Public base URL for objects, if different from the endpoint. |
+| `TRUSTED_PROXY_COUNT` / `TRUSTED_PROXY_CIDRS` | optional (see above section) | Leave unset for a directly-exposed local smoke; all clients then share one coarser rate-limit bucket per scope (safe, documented). |
+| `ALLOW_DEMO_AUTH`, `DEMO_ADMIN_*`, `ALLOW_LOCAL_SEED`, `SEED_ADMIN_*` | **keep unset** in production mode | Development-only switches; demo auth is additionally gated to non-production and cannot be enabled here. |
+
+Shell variables always win over `.env*` files, and `next start` (production) loads, in order: `process.env` → `.env.production.local` → `.env.local` → `.env.production` → `.env`. In this repository `.env` and `.env.local` are gitignored, so the two safe Codespace-only options are:
+
+- **`.env.local`** in the repository root (gitignored, never committed) — the standard Next.js location for local values; or
+- **shell exports** in the Codespace terminal immediately before `npm run start` — no file at all.
+
+Never write smoke credentials to `.env.production`, `.env.example` or any tracked file, and never commit a generated `AUTH_SECRET`.
+
+### Safe Codespace-only setup (disposable, local, no committed secrets)
+
+```bash
+# 1. Real local PostgreSQL (satisfies "actually reachable database").
+sudo apt-get update && sudo apt-get install -y postgresql
+sudo service postgresql start
+sudo -u postgres psql -c "CREATE ROLE iet_smoke LOGIN PASSWORD 'iet-smoke-only'"
+sudo -u postgres createdb --owner=iet_smoke iet_smoke
+export DATABASE_URL="postgresql://iet-smoke-only:iet-smoke-only@localhost:5432/iet_smoke"
+
+# 2. Generate the Prisma client and apply migrations (network is available in Codespaces).
+npm ci && npm run db:generate
+npx prisma migrate deploy
+
+# 3. One-time super-admin bootstrap against the disposable database.
+export BOOTSTRAP_ADMIN_EMAIL="smoke-admin@localhost"
+export BOOTSTRAP_ADMIN_NAME="Smoke Test Administrator"
+export BOOTSTRAP_ADMIN_PASSWORD="$(openssl rand -base64 18)"
+export BOOTSTRAP_I_UNDERSTAND=yes
+npx tsx scripts/bootstrap-admin.ts
+
+# 4. Real local S3-compatible storage (only needed for the upload/media part of the smoke).
+curl -fsSL https://dl.min.io/server/minio/release/linux-amd64/minio -o /tmp/minio && chmod +x /tmp/minio
+MINIO_ROOT_USER="smoke" MINIO_ROOT_PASSWORD="$(openssl rand -hex 12)" \
+  /tmp/minio server /tmp/minio-data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 &
+export STORAGE_ENDPOINT="http://localhost:9000"
+export STORAGE_BUCKET="iet-smoke"
+export STORAGE_ACCESS_KEY="smoke"
+export STORAGE_SECRET_KEY="<the MINIO_ROOT_PASSWORD you generated>"
+export STORAGE_REGION="us-east-1"
+export STORAGE_FORCE_PATH_STYLE="true"
+# create the bucket once via the MinIO console at http://localhost:9001 or `mc mb local/iet-smoke`
+
+# 5. Remaining required variables.
+export AUTH_SECRET="$(openssl rand -hex 32)"
+export NEXT_PUBLIC_SITE_URL="<your Codespace preview https URL for port 3000>"
+
+# 6. Build and start; run the smoke checks below.
+npm run build && npm run start
+```
+
+Smoke checks on the running production-mode server: public homepage and department/programme pages return 200 with database content; `/api/search?q=engineering` returns published records only; `/admin` redirects unauthenticated visitors to `/admin/login`; login with the bootstrapped administrator works and sets an HTTP-only cookie; logout removes it; upload a test image and a test PDF and confirm they are stored in MinIO, recorded in the database, and served by the media route with the correct disposition; an unknown media key returns 404.
+
+**This is a disposable smoke environment, not a production deployment, and does not make the application production-ready.** Production requires institution-owned PostgreSQL, object storage, the HTTPS reverse proxy with trusted-proxy configuration, secret management and the full release checklist.
+
+
 
 - [ ] `npm ci`, `npm run db:generate`, `npx prisma migrate deploy`, `npm run build` succeed in the release environment.
 - [ ] App refuses to start in a disposable production-mode test when a required variable is removed.
