@@ -1,11 +1,12 @@
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { randomBytes } from "node:crypto";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { assertProductionConfig, assertDemoAuthConfig, demoAuthEnabled, isProduction } from "@/lib/config";
 import { databaseConfigured, getPrisma } from "@/lib/db";
 
 const COOKIE_NAME = "iet_session";
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 8;
 const DEV_SECRET = randomBytes(32).toString("hex");
 
 export type UserRole = "SUPER_ADMIN" | "IET_ADMIN" | "DEPARTMENT_ADMIN" | "EDITOR";
@@ -19,13 +20,39 @@ export type SessionUser = {
   sessionVersion?: number;
 };
 
-function secret() {
+export function sessionSecret(): Uint8Array {
   const configured = process.env.AUTH_SECRET?.trim();
   if (isProduction) {
     assertProductionConfig();
     return new TextEncoder().encode(configured);
   }
   return new TextEncoder().encode(configured || DEV_SECRET);
+}
+
+export async function issueSessionToken(user: SessionUser, signingKey?: Uint8Array): Promise<string> {
+  return new SignJWT({ ...user })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setSubject(user.id)
+    .setJti(randomBytes(16).toString("hex"))
+    .setIssuedAt()
+    .setExpirationTime(`${SESSION_MAX_AGE_SECONDS}s`)
+    .sign(signingKey || sessionSecret());
+}
+
+/**
+ * Verify a session token's signature, expiry and required claims. Returns the
+ * JWT payload, or null for any invalid/tampered/expired token. The
+ * authenticated user's authoritative state (role, active flag, session
+ * version) is still re-checked against the database in getSession().
+ */
+export async function verifySessionToken(token: string, signingKey?: Uint8Array): Promise<JWTPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, signingKey || sessionSecret());
+    if (!payload.email || !payload.role || !payload.sub) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 export async function authenticate(email: string, password: string): Promise<SessionUser | null> {
@@ -44,20 +71,14 @@ export async function authenticate(email: string, password: string): Promise<Ses
 
 export async function setSession(user: SessionUser) {
   assertProductionConfig();
-  const token = await new SignJWT({ ...user })
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setSubject(user.id)
-    .setJti(randomBytes(16).toString("hex"))
-    .setIssuedAt()
-    .setExpirationTime("8h")
-    .sign(secret());
+  const token = await issueSessionToken(user);
   const store = await cookies();
   store.set(COOKIE_NAME, token, {
     httpOnly: true,
     secure: isProduction,
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 8,
+    maxAge: SESSION_MAX_AGE_SECONDS,
   });
 }
 
@@ -66,32 +87,30 @@ export async function getSession(): Promise<SessionUser | null> {
   const store = await cookies();
   const token = store.get(COOKIE_NAME)?.value;
   if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, secret());
-    if (!payload.email || !payload.role || !payload.sub) return null;
+  const payload = await verifySessionToken(token);
+  if (!payload) return null;
 
-    if (databaseConfigured) {
-      const prisma = getPrisma();
-      if (!prisma) return null;
-      const user = await prisma.user.findUnique({ where: { id: String(payload.sub) } });
-      if (!user || !user.active) return null;
-      const tokenVersion = Number(payload.sessionVersion ?? 0);
-      if (user.sessionVersion !== tokenVersion) return null;
-      return { id: user.id, email: user.email, name: user.name, role: user.role, departmentId: user.departmentId || undefined, sessionVersion: user.sessionVersion };
-    }
-
-    if (!demoAuthEnabled()) return null;
-    return {
-      id: String(payload.sub),
-      email: String(payload.email),
-      name: String(payload.name || "IET Administrator"),
-      role: payload.role as UserRole,
-      departmentId: payload.departmentId ? String(payload.departmentId) : undefined,
-      sessionVersion: Number(payload.sessionVersion ?? 0),
-    };
-  } catch {
-    return null;
+  if (databaseConfigured) {
+    const prisma = getPrisma();
+    if (!prisma) return null;
+    const user = await prisma.user.findUnique({ where: { id: String(payload.sub) } });
+    if (!user || !user.active) return null;
+    // Session invalidation: tokens issued before a password/role/scope/active
+    // change carry the old sessionVersion and are rejected here.
+    const tokenVersion = Number(payload.sessionVersion ?? 0);
+    if (user.sessionVersion !== tokenVersion) return null;
+    return { id: user.id, email: user.email, name: user.name, role: user.role, departmentId: user.departmentId || undefined, sessionVersion: user.sessionVersion };
   }
+
+  if (!demoAuthEnabled()) return null;
+  return {
+    id: String(payload.sub),
+    email: String(payload.email),
+    name: String(payload.name || "IET Administrator"),
+    role: payload.role as UserRole,
+    departmentId: payload.departmentId ? String(payload.departmentId) : undefined,
+    sessionVersion: Number(payload.sessionVersion ?? 0),
+  };
 }
 
 export async function clearSession() {

@@ -31,8 +31,9 @@ export function getRuntimeConfig(): RuntimeConfig {
   };
 
   if (isProduction) {
-    const authSecret = config.authSecret || "";
-    if (authSecret.length < 32) errors.push("AUTH_SECRET (minimum 32 characters)");
+    // Only report the length problem when a value is present; a missing value
+    // is already listed once by `required()` above.
+    if (config.authSecret && config.authSecret.length < 32) errors.push("AUTH_SECRET (minimum 32 characters)");
     if (config.siteUrl) {
       try {
         const url = new URL(config.siteUrl);

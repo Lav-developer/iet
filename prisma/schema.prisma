@@ -371,7 +371,7 @@ model Page {
 
 model Media {
   id           String        @id @default(cuid())
-  key          String
+  key          String        @unique
   url          String
   mimeType     String
   sizeBytes    Int?

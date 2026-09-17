@@ -101,7 +101,6 @@ export type Publication = {
 
 export type Achievement = {
   id: string;
-  slug: string;
   title: string;
   category: string;
   description: string;
@@ -118,8 +117,9 @@ export type EventItem = {
   slug: string;
   title: string;
   summary: string;
-  startsAt?: string;
-  endsAt?: string;
+  // ISO string in the file-backed development store, Date from PostgreSQL.
+  startsAt?: string | Date | null;
+  endsAt?: string | Date | null;
   location?: string;
   registrationUrl?: string;
   departmentSlug?: string;

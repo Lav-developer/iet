@@ -31,9 +31,20 @@ Production refuses to start when `DATABASE_URL`, a 32-character minimum `AUTH_SE
    npx prisma migrate deploy
    ```
 
-   Migrations currently include the normalized schema, shared rate-limit buckets, session-version invalidation, publication department ownership and editorial attribution.
+   Migrations currently include the normalized schema, shared rate-limit buckets, session-version invalidation, publication department ownership, editorial attribution and the unique media storage-key constraint.
 
-6. Do **not** run `prisma/seed.ts` against production. Create the first named `SUPER_ADMIN` or `IET_ADMIN` through a controlled bootstrap procedure, then create additional named accounts in `/admin/users`.
+6. **First administrator bootstrap (one-time, manual).** Do **not** run `prisma/seed.ts` against production (it is development-only and self-refuses outside `NODE_ENV=development`). Create the first `SUPER_ADMIN` with the one-time bootstrap script. It is not an HTTP endpoint, it requires operator-supplied credentials, and it fails without changing anything if any `SUPER_ADMIN` already exists or the email is taken:
+
+   ```bash
+   DATABASE_URL="<production database url>" \
+   BOOTSTRAP_ADMIN_EMAIL="platform-admin@iet.example.ac.in" \
+   BOOTSTRAP_ADMIN_NAME="Platform Administrator" \
+   BOOTSTRAP_ADMIN_PASSWORD="<operator-generated, at least 12 characters, never a default>" \
+   BOOTSTRAP_I_UNDERSTAND=yes \
+   npx tsx scripts/bootstrap-admin.ts
+   ```
+
+   The script bcrypt-hashes the password (cost 12), writes a `BOOTSTRAP_SUPER_ADMIN` audit entry, and prints no secrets. Then sign in at `/admin/login` and create all further named accounts from the user administration screen. Run the script **once per database lifetime** — repeat runs refuse when a super administrator exists.
 7. Build and start:
 
    ```bash
@@ -41,7 +52,7 @@ Production refuses to start when `DATABASE_URL`, a 32-character minimum `AUTH_SE
    npm run start
    ```
 
-8. Put the process behind an HTTPS reverse proxy. Set the proxy's trusted forwarded-header behavior deliberately; never accept arbitrary client-supplied IP headers as an identity signal.
+8. Put the process behind an HTTPS reverse proxy and configure the trusted-proxy variables exactly as described in "Trusted reverse proxy configuration" below. Never accept arbitrary client-supplied IP headers as an identity signal.
 9. Perform the smoke checks in the release checklist below, including a failed configuration test in a non-production environment.
 
 ## Configuration and access controls
@@ -51,8 +62,19 @@ Production refuses to start when `DATABASE_URL`, a 32-character minimum `AUTH_SE
 - Use one account per person. Review the user list and department assignments at least quarterly and after staff changes.
 - `DEPARTMENT_ADMIN` is checked against both the record currently addressed and the requested department, including normalized faculty/laboratory/author relationships.
 - Keep `SUPER_ADMIN` rare. IET administrators cannot grant super-administrator access.
-- Production rate limits use PostgreSQL so multiple application instances share counters. Add alerting for repeated login failures and unusual admin mutation volume.
+- Production rate limits use PostgreSQL so multiple application instances share counters. Add alerting for repeated login failures and unusual admin mutation volume. Login protection is layered: 10 attempts per 15 minutes per client address, 10 attempts per 15 minutes per account, and a progressive delay (5 s per attempt after the second, capped at 30 s) applied before credentials are checked.
 - The current same-origin policy rejects state-changing requests without a matching `Origin`/`Referer` in production. Keep the reverse proxy host configuration stable and test approved administrative origins.
+
+## Trusted reverse proxy configuration
+
+Rate limiting, login brute-force protection and audit-log IP attribution all derive the client address from the **trusted proxy chain** (`lib/security.ts` → `trustedClientIp`). The application never trusts `X-Real-IP` and never trusts `X-Forwarded-For` unless a trusted-proxy topology is configured:
+
+- `TRUSTED_PROXY_COUNT` — the number of trusted reverse proxies/load balancers between clients and the application (set it to match your actual topology, e.g. `1` for a single nginx/ALB/HAProxy front).
+- `TRUSTED_PROXY_CIDRS` — comma-separated CIDRs covering the trusted proxies (e.g. `10.0.0.0/8,192.168.0.0/16`). Used to verify the trusted region of the chain; strongly recommended.
+
+Expected proxy behavior: each trusted proxy must **append** the peer address it received the request from to `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`, AWS ALB default, HAProxy `X-Forwarded-For append`). Because each trusted proxy appends a true hop to the right of any client-forged prefix, the client address is deterministically the chain entry at index `length - TRUSTED_PROXY_COUNT`; rotating forged left-hand entries cannot change it.
+
+Fail-closed behavior: if `TRUSTED_PROXY_COUNT` is unset/0, no forwarded header is ever consulted and all clients share one coarser rate-limit bucket per scope. If the chain is missing, shorter than the configured count, malformed, or its trusted region fails CIDR verification, the request is pooled into that shared `direct` bucket instead of receiving a header-derived identity. If `TRUSTED_PROXY_COUNT` is larger than the actual number of proxies, legitimate traffic degrades to the shared bucket (safe); if it is smaller, identity becomes coarser but remains unspoofable.
 
 ## Object storage and uploads
 

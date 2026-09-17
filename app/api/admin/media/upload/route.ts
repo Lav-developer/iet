@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { getPrisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
-import { consumeRateLimit, isSameOrigin } from "@/lib/security";
+import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
 import { deleteObject, objectUrl, putObject, randomObjectKey, validateMagicBytes, validateUpload } from "@/lib/storage";
 import { upsertEntity } from "@/lib/store";
 
 export const runtime = "nodejs";
 
 function requestIp(request: Request) {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || undefined;
+  // Derived from the trusted proxy chain (see lib/security.ts), never from
+  // raw client headers, so audit attribution cannot be spoofed.
+  return trustedClientIp(request);
 }
 
 export async function POST(request: Request) {
