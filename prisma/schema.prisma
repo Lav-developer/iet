@@ -1,0 +1,486 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  IET_ADMIN
+  DEPARTMENT_ADMIN
+  EDITOR
+}
+
+enum ContentStatus {
+  DRAFT
+  REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+model User {
+  id             String      @id @default(cuid())
+  email          String      @unique
+  name           String
+  passwordHash   String
+  role           UserRole    @default(EDITOR)
+  departmentId   String?
+  active         Boolean     @default(true)
+  sessionVersion Int         @default(0)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  department     Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  auditLogs      AuditLog[]
+
+  @@index([role])
+  @@index([departmentId])
+  @@index([active])
+}
+
+model Department {
+  id                 String                   @id @default(cuid())
+  slug               String                   @unique
+  name               String
+  shortName          String?
+  overview           String                   @db.Text
+  established        String?
+  sourceNote         String?                  @db.Text
+  status             ContentStatus            @default(PUBLISHED)
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+  publishedAt        DateTime?
+  createdById        String?
+  updatedById        String?
+  users              User[]
+  programs           Program[]
+  faculty            FacultyMember[]
+  laboratories       Laboratory[]
+  projects           Project[]
+  publications       Publication[]
+  achievements       Achievement[]
+  events             Event[]
+  organizations      StudentOrganization[]
+  documents          Document[]
+  departmentResearch DepartmentResearchArea[]
+
+  @@index([status])
+  @@index([name])
+}
+
+model Program {
+  id            String              @id @default(cuid())
+  slug          String              @unique
+  title         String
+  shortTitle    String?
+  level         String
+  duration      String
+  approvedSeats Int?
+  summary       String              @db.Text
+  eligibility   String?             @db.Text
+  admissionNote String?             @db.Text
+  sourceNote    String?             @db.Text
+  departmentId  String?
+  status        ContentStatus       @default(PUBLISHED)
+  createdAt     DateTime            @default(now())
+  createdById   String?
+  updatedById   String?
+  updatedAt     DateTime            @updatedAt
+  publishedAt   DateTime?
+  department    Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  laboratories  ProgramLaboratory[]
+
+  @@index([departmentId])
+  @@index([level])
+  @@index([status])
+}
+
+model FacultyMember {
+  id                String                @id @default(cuid())
+  slug              String                @unique
+  name              String
+  designation       String
+  email             String?
+  phone             String?
+  qualification     String?               @db.Text
+  profile           String?               @db.Text
+  researchInterests String?               @db.Text
+  departmentId      String?
+  type              String                @default("FACULTY")
+  status            ContentStatus         @default(PUBLISHED)
+  createdAt         DateTime              @default(now())
+  createdById       String?
+  updatedById       String?
+  updatedAt         DateTime              @updatedAt
+  publishedAt       DateTime?
+  department        Department?           @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  researchAreas     FacultyResearchArea[]
+  projects          ProjectFaculty[]
+  publications      PublicationFaculty[]
+  laboratories      FacultyLaboratory[]
+
+  @@index([departmentId])
+  @@index([designation])
+  @@index([status])
+  @@index([name])
+}
+
+model Laboratory {
+  id                String              @id @default(cuid())
+  slug              String              @unique
+  name              String
+  description       String              @db.Text
+  equipment         String?             @db.Text
+  courses           String?             @db.Text
+  researchRelevance String?             @db.Text
+  departmentId      String?
+  status            ContentStatus       @default(PUBLISHED)
+  createdAt         DateTime            @default(now())
+  createdById       String?
+  updatedById       String?
+  updatedAt         DateTime            @updatedAt
+  publishedAt       DateTime?
+  department        Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  projects          ProjectLaboratory[]
+  programs          ProgramLaboratory[]
+  faculty           FacultyLaboratory[]
+
+  @@index([departmentId])
+  @@index([status])
+  @@index([name])
+}
+
+model ResearchArea {
+  id          String                   @id @default(cuid())
+  slug        String                   @unique
+  name        String
+  description String                   @db.Text
+  sourceNote  String?                  @db.Text
+  status      ContentStatus            @default(PUBLISHED)
+  createdAt   DateTime                 @default(now())
+  createdById String?
+  updatedById String?
+  updatedAt   DateTime                 @updatedAt
+  publishedAt DateTime?
+  faculty     FacultyResearchArea[]
+  departments DepartmentResearchArea[]
+
+  @@index([status])
+  @@index([name])
+}
+
+model FacultyResearchArea {
+  facultyId      String
+  researchAreaId String
+  faculty        FacultyMember @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  researchArea   ResearchArea  @relation(fields: [researchAreaId], references: [id], onDelete: Cascade)
+
+  @@id([facultyId, researchAreaId])
+}
+
+model DepartmentResearchArea {
+  departmentId   String
+  researchAreaId String
+  department     Department   @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  researchArea   ResearchArea @relation(fields: [researchAreaId], references: [id], onDelete: Cascade)
+
+  @@id([departmentId, researchAreaId])
+}
+
+model Project {
+  id           String              @id @default(cuid())
+  slug         String              @unique
+  title        String
+  summary      String              @db.Text
+  sponsor      String?
+  status       ContentStatus       @default(DRAFT)
+  departmentId String?
+  createdAt    DateTime            @default(now())
+  createdById  String?
+  updatedById  String?
+  updatedAt    DateTime            @updatedAt
+  publishedAt  DateTime?
+  department   Department?         @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  faculty      ProjectFaculty[]
+  laboratories ProjectLaboratory[]
+
+  @@index([departmentId])
+  @@index([status])
+}
+
+model ProjectFaculty {
+  projectId String
+  facultyId String
+  project   Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  faculty   FacultyMember @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, facultyId])
+}
+
+model ProjectLaboratory {
+  projectId    String
+  laboratoryId String
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  laboratory   Laboratory @relation(fields: [laboratoryId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, laboratoryId])
+}
+
+model ProgramLaboratory {
+  programId    String
+  laboratoryId String
+  program      Program    @relation(fields: [programId], references: [id], onDelete: Cascade)
+  laboratory   Laboratory @relation(fields: [laboratoryId], references: [id], onDelete: Cascade)
+
+  @@id([programId, laboratoryId])
+}
+
+model FacultyLaboratory {
+  facultyId    String
+  laboratoryId String
+  faculty      FacultyMember @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  laboratory   Laboratory    @relation(fields: [laboratoryId], references: [id], onDelete: Cascade)
+
+  @@id([facultyId, laboratoryId])
+}
+
+model Publication {
+  id           String               @id @default(cuid())
+  slug         String               @unique
+  title        String
+  venue        String?
+  year         Int?
+  doi          String?
+  url          String?
+  abstract     String?              @db.Text
+  departmentId String?
+  status       ContentStatus        @default(DRAFT)
+  createdAt    DateTime             @default(now())
+  createdById  String?
+  updatedById  String?
+  updatedAt    DateTime             @updatedAt
+  publishedAt  DateTime?
+  department   Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  authors      PublicationFaculty[]
+
+  @@index([departmentId])
+  @@index([year])
+  @@index([status])
+}
+
+model PublicationFaculty {
+  publicationId String
+  facultyId     String
+  publication   Publication   @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  faculty       FacultyMember @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@id([publicationId, facultyId])
+}
+
+model Achievement {
+  id           String        @id @default(cuid())
+  title        String
+  category     String
+  description  String        @db.Text
+  recipient    String?
+  year         Int?
+  eventName    String?
+  mediaId      String?
+  departmentId String?
+  status       ContentStatus @default(DRAFT)
+  createdAt    DateTime      @default(now())
+  createdById  String?
+  updatedById  String?
+  updatedAt    DateTime      @updatedAt
+  publishedAt  DateTime?
+  department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  media        Media?        @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+
+  @@index([departmentId])
+  @@index([category])
+  @@index([year])
+  @@index([status])
+}
+
+model Event {
+  id              String               @id @default(cuid())
+  slug            String               @unique
+  title           String
+  summary         String               @db.Text
+  startsAt        DateTime?
+  endsAt          DateTime?
+  location        String?
+  registrationUrl String?
+  galleryMediaId  String?
+  departmentId    String?
+  organizationId  String?
+  status          ContentStatus        @default(DRAFT)
+  createdAt       DateTime             @default(now())
+  createdById     String?
+  updatedById     String?
+  updatedAt       DateTime             @updatedAt
+  publishedAt     DateTime?
+  department      Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  organization    StudentOrganization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([startsAt])
+  @@index([departmentId])
+  @@index([status])
+}
+
+model StudentOrganization {
+  id           String        @id @default(cuid())
+  slug         String        @unique
+  name         String
+  description  String        @db.Text
+  contactUrl   String?
+  departmentId String?
+  status       ContentStatus @default(DRAFT)
+  createdAt    DateTime      @default(now())
+  createdById  String?
+  updatedById  String?
+  updatedAt    DateTime      @updatedAt
+  publishedAt  DateTime?
+  department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  events       Event[]
+
+  @@index([departmentId])
+  @@index([status])
+}
+
+model Page {
+  id          String        @id @default(cuid())
+  slug        String
+  title       String
+  excerpt     String?       @db.Text
+  body        String        @db.Text
+  locale      String        @default("en")
+  status      ContentStatus @default(PUBLISHED)
+  createdAt   DateTime      @default(now())
+  createdById String?
+  updatedById String?
+  updatedAt   DateTime      @updatedAt
+  publishedAt DateTime?
+  documents   Document[]
+
+  @@unique([slug, locale])
+  @@index([status])
+}
+
+model Media {
+  id           String        @id @default(cuid())
+  key          String
+  url          String
+  mimeType     String
+  sizeBytes    Int?
+  altText      String?
+  caption      String?
+  width        Int?
+  height       Int?
+  createdAt    DateTime      @default(now())
+  createdById  String?
+  updatedById  String?
+  updatedAt    DateTime      @updatedAt
+  achievements Achievement[]
+
+  @@index([mimeType])
+}
+
+model Document {
+  id           String        @id @default(cuid())
+  title        String
+  description  String?       @db.Text
+  key          String
+  url          String
+  mimeType     String
+  sizeBytes    Int?
+  altText      String?
+  status       ContentStatus @default(DRAFT)
+  departmentId String?
+  pageId       String?
+  createdAt    DateTime      @default(now())
+  createdById  String?
+  updatedById  String?
+  updatedAt    DateTime      @updatedAt
+  department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  page         Page?         @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  @@index([departmentId])
+  @@index([pageId])
+  @@index([status])
+}
+
+model Link {
+  id          String        @id @default(cuid())
+  label       String
+  url         String
+  description String?
+  owner       String
+  order       Int           @default(0)
+  status      ContentStatus @default(PUBLISHED)
+  createdAt   DateTime      @default(now())
+  createdById String?
+  updatedById String?
+  updatedAt   DateTime      @updatedAt
+
+  @@index([owner])
+  @@index([status])
+}
+
+model Contact {
+  id          String        @id @default(cuid())
+  label       String
+  name        String?
+  email       String?
+  phone       String?
+  address     String?
+  category    String
+  status      ContentStatus @default(PUBLISHED)
+  createdAt   DateTime      @default(now())
+  createdById String?
+  updatedById String?
+  updatedAt   DateTime      @updatedAt
+
+  @@index([category])
+  @@index([status])
+}
+
+model SiteSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String   @db.Text
+  description String?
+  createdAt   DateTime @default(now())
+  createdById String?
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+model AuditLog {
+  id         String    @id @default(cuid())
+  userId     String?
+  role       UserRole?
+  action     String
+  entity     String
+  entityId   String?
+  beforeJson String?   @db.Text
+  afterJson  String?   @db.Text
+  ipAddress  String?
+  createdAt  DateTime  @default(now())
+  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
+
+model RateLimitBucket {
+  key       String   @id
+  count     Int      @default(0)
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([resetAt])
+}
