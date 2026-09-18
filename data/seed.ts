@@ -786,7 +786,6 @@ export const seedData: SiteData = {
   achievements: [
     {
       id: "achievement-placeholder",
-      slug: "awaiting-approved-achievement-record",
       title: "Awaiting approved achievement record",
       category: "Institutional achievement",
       description: "No achievement record is published in the supplied source material. Add a verified student, team or faculty achievement through the CMS.",

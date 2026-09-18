@@ -3,7 +3,7 @@ import { databaseConfigured, getPrisma } from "@/lib/db";
 import { assertProductionConfig, isProduction } from "@/lib/config";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import type {
   Achievement,
   AuditEntry,
@@ -107,6 +107,22 @@ export async function getEntity(entity: EntityName, includeDrafts = true): Promi
   return clone(records);
 }
 
+/**
+ * Targeted single-record read (one scoped query, never the whole dataset).
+ * Used for authorization checks and audit before-snapshots.
+ */
+export async function getSingleEntityRecord(entity: EntityName, id: string): Promise<unknown | null> {
+  assertDataStoreAvailable();
+  if (databaseConfigured) {
+    const rows = (await getDatabaseEntity(entity, true)) ?? [];
+    return rows.find((item) => (item as { id?: string }).id === id) ?? null;
+  }
+  const list = readDemoStore()[entity] as unknown as Array<Record<string, unknown>>;
+  return clone(list.find((item) => item.id === id) ?? null);
+}
+
+type TxClient = PrismaClient | Prisma.TransactionClient;
+
 export async function upsertEntity(
   entity: EntityName,
   payload: Record<string, unknown>,
@@ -118,9 +134,18 @@ export async function upsertEntity(
 ) {
   assertDataStoreAvailable();
   if (databaseConfigured) {
-    const before = id ? (await getEntity(entity, true)).find((item) => (item as { id?: string }).id === id) : undefined;
-    const saved = await upsertDatabaseEntity(entity, payload, id, actorId);
-    await appendAudit({ user: actor, userId: actorId, role, ipAddress, action: id ? "UPDATED" : "CREATED", entity, entityId: String((saved as { id: string }).id), before, after: saved });
+    const prisma = getPrisma();
+    if (!prisma) throw new Error("DATABASE_URL is required in production.");
+    const before = id ? await getSingleEntityRecord(entity, id) : undefined;
+    // Content mutation + relationship synchronization + audit logging are a
+    // single transaction: a failed relationship update cannot leave partially
+    // updated content or a missing audit entry.
+    const saved = await prisma.$transaction(async (tx) => {
+      const savedRow = await upsertDatabaseEntity(entity, payload, id, actorId, tx);
+      await syncRelationships(entity, savedRow.id, payload, tx);
+      await appendAuditEntry(tx, { user: actor, userId: actorId, role, ipAddress, action: id ? "UPDATED" : "CREATED", entity, entityId: String((savedRow as { id: string }).id), before, after: savedRow });
+      return savedRow;
+    });
     return saved;
   }
 
@@ -134,7 +159,7 @@ export async function upsertEntity(
     ...payload,
     id: generatedId,
     status: nextStatus,
-    publishedAt: nextStatus === "PUBLISHED" ? (previous?.publishedAt || now) : previous?.publishedAt,
+    publishedAt: nextStatus === "PUBLISHED" ? now : previous?.publishedAt,
     updatedAt: now,
     createdAt: previous?.createdAt || now,
   } as Record<string, unknown>;
@@ -149,9 +174,14 @@ export async function upsertEntity(
 export async function deleteEntity(entity: EntityName, id: string, actor = "demo admin", actorId?: string, role?: string, ipAddress?: string) {
   assertDataStoreAvailable();
   if (databaseConfigured) {
-    const before = (await getEntity(entity, true)).find((item) => (item as { id?: string }).id === id);
-    await deleteDatabaseEntity(entity, id);
-    await appendAudit({ user: actor, userId: actorId, role, ipAddress, action: "DELETED", entity, entityId: id, before });
+    const prisma = getPrisma();
+    if (!prisma) throw new Error("DATABASE_URL is required in production.");
+    const before = await getSingleEntityRecord(entity, id);
+    if (!before) throw new Error("Record not found");
+    await prisma.$transaction(async (tx) => {
+      await deleteDatabaseEntity(entity, id, tx);
+      await appendAuditEntry(tx, { user: actor, userId: actorId, role, ipAddress, action: "DELETED", entity, entityId: id, before });
+    });
     return { id };
   }
   const demoStore = readDemoStore();
@@ -164,15 +194,44 @@ export async function deleteEntity(entity: EntityName, id: string, actor = "demo
   return { id };
 }
 
-export async function getAuditEntries() {
+export type AuditPage = { logs: AuditEntry[]; total: number; page: number; limit: number; totalPages: number };
+
+export async function getAuditEntries(page = 1, limit = 100): Promise<AuditPage> {
   assertDataStoreAvailable();
+  const safePage = Math.max(1, Math.floor(page));
+  const safeLimit = Math.min(500, Math.max(1, Math.floor(limit)));
   if (databaseConfigured) {
     const prisma = getPrisma();
     if (!prisma) throw new Error("DATABASE_URL is required in production.");
-    const logs = await prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 100, include: { user: { select: { email: true, name: true } } } });
-    return logs.map((log) => ({ ...log, user: log.user?.name || log.user?.email || log.userId || "system" }));
+    const [total, logs] = await Promise.all([
+      prisma.auditLog.count(),
+      prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, skip: (safePage - 1) * safeLimit, take: safeLimit, include: { user: { select: { email: true, name: true } } } }),
+    ]);
+    return {
+      logs: logs.map((log) => ({ ...log, user: log.user?.name || log.user?.email || log.userId || "system" })) as unknown as AuditEntry[],
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+    };
   }
-  return clone(readAuditEntries()).reverse();
+  const all = clone(readAuditEntries()).reverse();
+  return { logs: all.slice((safePage - 1) * safeLimit, safePage * safeLimit), total: all.length, page: safePage, limit: safeLimit, totalPages: Math.max(1, Math.ceil(all.length / safeLimit)) };
+}
+
+async function appendAuditEntry(client: TxClient, entry: Omit<AuditEntry, "id" | "timestamp">) {
+  await client.auditLog.create({
+    data: {
+      userId: entry.userId,
+      role: entry.role as any,
+      action: entry.action,
+      entity: entry.entity,
+      entityId: entry.entityId,
+      ipAddress: entry.ipAddress,
+      beforeJson: entry.before ? JSON.stringify(entry.before) : undefined,
+      afterJson: entry.after ? JSON.stringify(entry.after) : undefined,
+    },
+  });
 }
 
 async function appendAudit(entry: Omit<AuditEntry, "id" | "timestamp">) {
@@ -183,21 +242,9 @@ async function appendAudit(entry: Omit<AuditEntry, "id" | "timestamp">) {
     writeAuditEntries(entries);
     return;
   }
-
   const prisma = getPrisma();
   if (!prisma) throw new Error("DATABASE_URL is required in production.");
-  await prisma.auditLog.create({
-    data: {
-      userId: audit.userId,
-      role: audit.role as any,
-      action: audit.action,
-      entity: audit.entity,
-      entityId: audit.entityId,
-      ipAddress: audit.ipAddress,
-      beforeJson: audit.before ? JSON.stringify(audit.before) : undefined,
-      afterJson: audit.after ? JSON.stringify(audit.after) : undefined,
-    },
-  });
+  await appendAuditEntry(prisma, entry);
 }
 
 function filterPublished(data: SiteData): SiteData {
@@ -222,120 +269,189 @@ function filterPublished(data: SiteData): SiteData {
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Database queries                                                    */
+/* ------------------------------------------------------------------ */
+
+function wherePublished(includeDrafts: boolean) {
+  return includeDrafts ? {} : { status: "PUBLISHED" as const };
+}
+
+function mapFacultyRow(item: {
+  id: string; slug: string; name: string; designation: string;
+  researchInterests: string | null;
+  department?: { slug: string; name: string } | null;
+  researchAreas?: Array<{ researchArea: { name: string; slug: string } }>;
+  laboratories?: Array<{ laboratory: { slug: string } }>;
+}) {
+  return {
+    ...item,
+    departmentSlug: item.department?.slug,
+    departmentName: item.department?.name,
+    researchInterests: item.researchAreas?.length ? item.researchAreas.map((area) => area.researchArea.name) : (item.researchInterests ? item.researchInterests.split("\n").filter(Boolean) : []),
+    researchAreaSlugs: (item.researchAreas || []).map((area) => area.researchArea.slug),
+    laboratorySlugs: (item.laboratories || []).map((join) => join.laboratory.slug),
+  };
+}
+
+function mapRowWithDepartment<T extends { department?: { slug: string; name: string } | null }>(item: T) {
+  return { ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name };
+}
+
+type EntityQuery = (prisma: PrismaClient, includeDrafts: boolean) => Promise<unknown[]>;
+
+/**
+ * One scoped query per entity — used by admin entity reads, single-record
+ * reads, audit snapshots and public site data. Nothing here loads the whole
+ * dataset for a single-entity operation.
+ */
+const entityQueries: Record<EntityName, EntityQuery> = {
+  departments: (prisma, includeDrafts) =>
+    prisma.department.findMany({ where: wherePublished(includeDrafts), orderBy: { name: "asc" } }),
+  programs: (prisma, includeDrafts) =>
+    prisma.program
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } })
+      .then((rows) => rows.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name, laboratorySlugs: item.laboratories.map((join) => join.laboratory.slug) }))),
+  faculty: (prisma, includeDrafts) =>
+    prisma.facultyMember
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true, researchAreas: { include: { researchArea: true } }, laboratories: { include: { laboratory: true } } }, orderBy: { name: "asc" } })
+      .then((rows) => rows.map(mapFacultyRow)),
+  laboratories: (prisma, includeDrafts) =>
+    prisma.laboratory
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { name: "asc" } })
+      .then((rows) => rows.map(mapRowWithDepartment)),
+  researchAreas: (prisma, includeDrafts) =>
+    prisma.researchArea
+      .findMany({ where: wherePublished(includeDrafts), include: { faculty: { include: { faculty: true } }, departments: { include: { department: true } } }, orderBy: { name: "asc" } })
+      .then((rows) => rows.map((item) => ({ ...item, facultySlugs: item.faculty.map((join) => join.faculty.slug), departmentSlugs: item.departments.map((join) => join.department.slug) }))),
+  projects: (prisma, includeDrafts) =>
+    prisma.project
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true, faculty: { include: { faculty: true } }, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } })
+      .then((rows) => rows.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name, facultySlugs: item.faculty.map((join) => join.faculty.slug), laboratorySlugs: item.laboratories.map((join) => join.laboratory.slug) }))),
+  publications: (prisma, includeDrafts) =>
+    prisma.publication
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true, authors: { include: { faculty: true } } }, orderBy: { year: "desc" } })
+      .then((rows) => rows.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name, authorSlugs: item.authors.map((author) => author.faculty.slug) }))),
+  achievements: (prisma, includeDrafts) =>
+    prisma.achievement
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { year: "desc" } })
+      .then((rows) => rows.map(mapRowWithDepartment)),
+  events: (prisma, includeDrafts) =>
+    prisma.event
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { startsAt: "asc" } })
+      .then((rows) => rows.map(mapRowWithDepartment)),
+  organizations: (prisma, includeDrafts) =>
+    prisma.studentOrganization
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { name: "asc" } })
+      .then((rows) => rows.map(mapRowWithDepartment)),
+  pages: (prisma, includeDrafts) =>
+    prisma.page.findMany({ where: wherePublished(includeDrafts), orderBy: { title: "asc" } }),
+  links: (prisma, includeDrafts) =>
+    prisma.link.findMany({ where: wherePublished(includeDrafts), orderBy: { order: "asc" } }),
+  contacts: (prisma, includeDrafts) =>
+    prisma.contact.findMany({ where: wherePublished(includeDrafts), orderBy: { label: "asc" } }),
+  settings: (prisma) =>
+    prisma.siteSetting.findMany({ orderBy: { key: "asc" } }),
+  media: (prisma) =>
+    prisma.media.findMany({ orderBy: { createdAt: "desc" } }),
+  documents: (prisma, includeDrafts) =>
+    prisma.document
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { title: "asc" } })
+      .then((rows) => rows.map(mapRowWithDepartment)),
+};
+
+async function getDatabaseEntity(entity: EntityName, includeDrafts: boolean): Promise<unknown[] | null> {
+  const prisma = getPrisma();
+  if (!prisma) throw new Error("DATABASE_URL is required for database content.");
+  return entityQueries[entity](prisma, includeDrafts);
+}
+
 async function getDatabaseData(includeDrafts: boolean): Promise<SiteData> {
   const prisma = getPrisma();
   if (!prisma) throw new Error("DATABASE_URL is required for database content.");
-  const where = includeDrafts ? {} : { status: "PUBLISHED" as const };
   const [departments, programs, faculty, laboratories, researchAreas, projects, publications, achievements, events, organizations, pages, links, contacts, settings, media, documents] = await Promise.all([
-    prisma.department.findMany({ where, orderBy: { name: "asc" } }),
-    prisma.program.findMany({ where, include: { department: true, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } }),
-    prisma.facultyMember.findMany({ where, include: { department: true, researchAreas: { include: { researchArea: true } }, laboratories: { include: { laboratory: true } } }, orderBy: { name: "asc" } }),
-    prisma.laboratory.findMany({ where, include: { department: true }, orderBy: { name: "asc" } }),
-    prisma.researchArea.findMany({ where, include: { faculty: { include: { faculty: true } }, departments: { include: { department: true } } }, orderBy: { name: "asc" } }),
-    prisma.project.findMany({ where, include: { department: true, faculty: { include: { faculty: true } }, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } }),
-    prisma.publication.findMany({ where, include: { department: true, authors: { include: { faculty: true } } }, orderBy: { year: "desc" } }),
-    prisma.achievement.findMany({ where, include: { department: true }, orderBy: { year: "desc" } }),
-    prisma.event.findMany({ where, include: { department: true }, orderBy: { startsAt: "asc" } }),
-    prisma.studentOrganization.findMany({ where, include: { department: true }, orderBy: { name: "asc" } }),
-    prisma.page.findMany({ where, orderBy: { title: "asc" } }),
-    prisma.link.findMany({ where, orderBy: { order: "asc" } }),
-    prisma.contact.findMany({ where, orderBy: { label: "asc" } }),
-    prisma.siteSetting.findMany({ orderBy: { key: "asc" } }),
-    prisma.media.findMany({ orderBy: { createdAt: "desc" } }),
-    prisma.document.findMany({ where, include: { department: true }, orderBy: { title: "asc" } }),
+    entityQueries.departments(prisma, includeDrafts),
+    entityQueries.programs(prisma, includeDrafts),
+    entityQueries.faculty(prisma, includeDrafts),
+    entityQueries.laboratories(prisma, includeDrafts),
+    entityQueries.researchAreas(prisma, includeDrafts),
+    entityQueries.projects(prisma, includeDrafts),
+    entityQueries.publications(prisma, includeDrafts),
+    entityQueries.achievements(prisma, includeDrafts),
+    entityQueries.events(prisma, includeDrafts),
+    entityQueries.organizations(prisma, includeDrafts),
+    entityQueries.pages(prisma, includeDrafts),
+    entityQueries.links(prisma, includeDrafts),
+    entityQueries.contacts(prisma, includeDrafts),
+    entityQueries.settings(prisma, false),
+    entityQueries.media(prisma, false),
+    entityQueries.documents(prisma, includeDrafts),
   ]);
 
   return {
     departments: departments as unknown as Department[],
-    faculty: faculty.map((item) => ({
-      ...item,
-      departmentSlug: item.department?.slug,
-      departmentName: item.department?.name,
-      researchInterests: item.researchAreas.length ? item.researchAreas.map((area) => area.researchArea.name) : (item.researchInterests ? item.researchInterests.split("\n").filter(Boolean) : []),
-      researchAreaSlugs: item.researchAreas.map((area) => area.researchArea.slug),
-      laboratorySlugs: item.laboratories.map((join) => join.laboratory.slug),
-    })) as unknown as FacultyMember[],
-    laboratories: laboratories.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name })) as unknown as Laboratory[],
-    researchAreas: researchAreas.map((item) => ({
-      ...item,
-      facultySlugs: item.faculty.map((join) => join.faculty.slug),
-      departmentSlugs: item.departments.map((join) => join.department.slug),
-    })) as unknown as ResearchArea[],
-    programs: programs.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name, laboratorySlugs: item.laboratories.map((join) => join.laboratory.slug) })) as unknown as Program[],
-    projects: projects.map((item) => ({
-      ...item,
-      departmentSlug: item.department?.slug,
-      departmentName: item.department?.name,
-      facultySlugs: item.faculty.map((join) => join.faculty.slug),
-      laboratorySlugs: item.laboratories.map((join) => join.laboratory.slug),
-    })) as unknown as Project[],
-    publications: publications.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name, authorSlugs: item.authors.map((author) => author.faculty.slug) })) as unknown as Publication[],
-    achievements: achievements.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name })) as unknown as Achievement[],
-    events: events.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name })) as unknown as EventItem[],
-    organizations: organizations.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name })) as unknown as StudentOrganization[],
+    faculty: faculty as unknown as FacultyMember[],
+    laboratories: laboratories as unknown as Laboratory[],
+    researchAreas: researchAreas as unknown as ResearchArea[],
+    programs: programs as unknown as Program[],
+    projects: projects as unknown as Project[],
+    publications: publications as unknown as Publication[],
+    achievements: achievements as unknown as Achievement[],
+    events: events as unknown as EventItem[],
+    organizations: organizations as unknown as StudentOrganization[],
     pages: pages as unknown as PageRecord[],
     links: links as unknown as LinkRecord[],
     contacts: contacts as unknown as ContactRecord[],
     settings: settings as unknown as SiteSetting[],
     media: media as unknown as MediaRecord[],
-    documents: documents.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name })) as unknown as DocumentRecord[],
+    documents: documents as unknown as DocumentRecord[],
   };
 }
 
-async function getDatabaseEntity(entity: EntityName, includeDrafts: boolean): Promise<unknown[] | null> {
-  const data = await getDatabaseData(includeDrafts);
-  return data[entity] as unknown[];
-}
-
-async function upsertDatabaseEntity(entity: EntityName, payload: Record<string, unknown>, id?: string, actorId?: string) {
-  const prisma = getPrisma();
-  if (!prisma) throw new Error("Database is not configured");
-  const data = await normalizeDatabasePayload(entity, payload, id, actorId);
+async function upsertDatabaseEntity(entity: EntityName, payload: Record<string, unknown>, id: string | undefined, actorId: string | undefined, client: TxClient) {
+  const data = await normalizeDatabasePayload(entity, payload, id, actorId, client);
   const where = id ? { id } : undefined;
   let saved: { id: string };
   switch (entity) {
-    case "departments": saved = (id ? await prisma.department.update({ where: where!, data: data as never }) : await prisma.department.create({ data: data as never })); break;
-    case "programs": saved = (id ? await prisma.program.update({ where: where!, data: data as never }) : await prisma.program.create({ data: data as never })); break;
-    case "faculty": saved = (id ? await prisma.facultyMember.update({ where: where!, data: data as never }) : await prisma.facultyMember.create({ data: data as never })); break;
-    case "laboratories": saved = (id ? await prisma.laboratory.update({ where: where!, data: data as never }) : await prisma.laboratory.create({ data: data as never })); break;
-    case "researchAreas": saved = (id ? await prisma.researchArea.update({ where: where!, data: data as never }) : await prisma.researchArea.create({ data: data as never })); break;
-    case "projects": saved = (id ? await prisma.project.update({ where: where!, data: data as never }) : await prisma.project.create({ data: data as never })); break;
-    case "publications": saved = (id ? await prisma.publication.update({ where: where!, data: data as never }) : await prisma.publication.create({ data: data as never })); break;
-    case "achievements": saved = (id ? await prisma.achievement.update({ where: where!, data: data as never }) : await prisma.achievement.create({ data: data as never })); break;
-    case "events": saved = (id ? await prisma.event.update({ where: where!, data: data as never }) : await prisma.event.create({ data: data as never })); break;
-    case "organizations": saved = (id ? await prisma.studentOrganization.update({ where: where!, data: data as never }) : await prisma.studentOrganization.create({ data: data as never })); break;
-    case "pages": saved = (id ? await prisma.page.update({ where: where!, data: data as never }) : await prisma.page.create({ data: data as never })); break;
-    case "links": saved = (id ? await prisma.link.update({ where: where!, data: data as never }) : await prisma.link.create({ data: data as never })); break;
-    case "contacts": saved = (id ? await prisma.contact.update({ where: where!, data: data as never }) : await prisma.contact.create({ data: data as never })); break;
-    case "settings": saved = (id ? await prisma.siteSetting.update({ where: where!, data: data as never }) : await prisma.siteSetting.create({ data: data as never })); break;
-    case "media": saved = (id ? await prisma.media.update({ where: where!, data: data as never }) : await prisma.media.create({ data: data as never })); break;
-    case "documents": saved = (id ? await prisma.document.update({ where: where!, data: data as never }) : await prisma.document.create({ data: data as never })); break;
+    case "departments": saved = (id ? await client.department.update({ where: where!, data: data as never }) : await client.department.create({ data: data as never })); break;
+    case "programs": saved = (id ? await client.program.update({ where: where!, data: data as never }) : await client.program.create({ data: data as never })); break;
+    case "faculty": saved = (id ? await client.facultyMember.update({ where: where!, data: data as never }) : await client.facultyMember.create({ data: data as never })); break;
+    case "laboratories": saved = (id ? await client.laboratory.update({ where: where!, data: data as never }) : await client.laboratory.create({ data: data as never })); break;
+    case "researchAreas": saved = (id ? await client.researchArea.update({ where: where!, data: data as never }) : await client.researchArea.create({ data: data as never })); break;
+    case "projects": saved = (id ? await client.project.update({ where: where!, data: data as never }) : await client.project.create({ data: data as never })); break;
+    case "publications": saved = (id ? await client.publication.update({ where: where!, data: data as never }) : await client.publication.create({ data: data as never })); break;
+    case "achievements": saved = (id ? await client.achievement.update({ where: where!, data: data as never }) : await client.achievement.create({ data: data as never })); break;
+    case "events": saved = (id ? await client.event.update({ where: where!, data: data as never }) : await client.event.create({ data: data as never })); break;
+    case "organizations": saved = (id ? await client.studentOrganization.update({ where: where!, data: data as never }) : await client.studentOrganization.create({ data: data as never })); break;
+    case "pages": saved = (id ? await client.page.update({ where: where!, data: data as never }) : await client.page.create({ data: data as never })); break;
+    case "links": saved = (id ? await client.link.update({ where: where!, data: data as never }) : await client.link.create({ data: data as never })); break;
+    case "contacts": saved = (id ? await client.contact.update({ where: where!, data: data as never }) : await client.contact.create({ data: data as never })); break;
+    case "settings": saved = (id ? await client.siteSetting.update({ where: where!, data: data as never }) : await client.siteSetting.create({ data: data as never })); break;
+    case "media": saved = (id ? await client.media.update({ where: where!, data: data as never }) : await client.media.create({ data: data as never })); break;
+    case "documents": saved = (id ? await client.document.update({ where: where!, data: data as never }) : await client.document.create({ data: data as never })); break;
     default: throw new Error("Unsupported entity");
   }
-  await syncRelationships(entity, saved.id, payload, prisma);
   return saved;
 }
 
-async function deleteDatabaseEntity(entity: EntityName, id: string) {
-  const prisma = getPrisma();
-  if (!prisma) throw new Error("Database is not configured");
+async function deleteDatabaseEntity(entity: EntityName, id: string, client: TxClient) {
   switch (entity) {
-    case "departments": return prisma.department.delete({ where: { id } });
-    case "programs": return prisma.program.delete({ where: { id } });
-    case "faculty": return prisma.facultyMember.delete({ where: { id } });
-    case "laboratories": return prisma.laboratory.delete({ where: { id } });
-    case "researchAreas": return prisma.researchArea.delete({ where: { id } });
-    case "projects": return prisma.project.delete({ where: { id } });
-    case "publications": return prisma.publication.delete({ where: { id } });
-    case "achievements": return prisma.achievement.delete({ where: { id } });
-    case "events": return prisma.event.delete({ where: { id } });
-    case "organizations": return prisma.studentOrganization.delete({ where: { id } });
-    case "pages": return prisma.page.delete({ where: { id } });
-    case "links": return prisma.link.delete({ where: { id } });
-    case "contacts": return prisma.contact.delete({ where: { id } });
-    case "settings": return prisma.siteSetting.delete({ where: { id } });
-    case "media": return prisma.media.delete({ where: { id } });
-    case "documents": return prisma.document.delete({ where: { id } });
+    case "departments": return client.department.delete({ where: { id } });
+    case "programs": return client.program.delete({ where: { id } });
+    case "faculty": return client.facultyMember.delete({ where: { id } });
+    case "laboratories": return client.laboratory.delete({ where: { id } });
+    case "researchAreas": return client.researchArea.delete({ where: { id } });
+    case "projects": return client.project.delete({ where: { id } });
+    case "publications": return client.publication.delete({ where: { id } });
+    case "achievements": return client.achievement.delete({ where: { id } });
+    case "events": return client.event.delete({ where: { id } });
+    case "organizations": return client.studentOrganization.delete({ where: { id } });
+    case "pages": return client.page.delete({ where: { id } });
+    case "links": return client.link.delete({ where: { id } });
+    case "contacts": return client.contact.delete({ where: { id } });
+    case "settings": return client.siteSetting.delete({ where: { id } });
+    case "media": return client.media.delete({ where: { id } });
+    case "documents": return client.document.delete({ where: { id } });
     default: throw new Error("Unsupported entity");
   }
 }
@@ -346,77 +462,79 @@ function relationValues(value: unknown) {
   return [];
 }
 
-async function syncRelationships(entity: EntityName, id: string, payload: Record<string, unknown>, prisma: PrismaClient) {
-  const resolveFaculty = async (values: string[]) => prisma.facultyMember.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
-  const resolveLaboratories = async (values: string[]) => prisma.laboratory.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
-  const resolveResearchAreas = async (values: string[]) => prisma.researchArea.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
-  const resolveDepartments = async (values: string[]) => prisma.department.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
+async function syncRelationships(entity: EntityName, id: string, payload: Record<string, unknown>, client: TxClient) {
+  const resolveFaculty = async (values: string[]) => client.facultyMember.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
+  const resolveLaboratories = async (values: string[]) => client.laboratory.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
+  const resolveResearchAreas = async (values: string[]) => client.researchArea.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
+  const resolveDepartments = async (values: string[]) => client.department.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
 
   if (entity === "programs" && payload.laboratorySlugs !== undefined) {
     const values = await resolveLaboratories(relationValues(payload.laboratorySlugs));
-    await prisma.programLaboratory.deleteMany({ where: { programId: id } });
-    if (values.length) await prisma.programLaboratory.createMany({ data: values.map((item) => ({ programId: id, laboratoryId: item.id })), skipDuplicates: true });
+    await client.programLaboratory.deleteMany({ where: { programId: id } });
+    if (values.length) await client.programLaboratory.createMany({ data: values.map((item) => ({ programId: id, laboratoryId: item.id })), skipDuplicates: true });
   }
   if (entity === "faculty") {
     if (payload.researchAreaSlugs !== undefined) {
       const values = await resolveResearchAreas(relationValues(payload.researchAreaSlugs));
-      await prisma.facultyResearchArea.deleteMany({ where: { facultyId: id } });
-      if (values.length) await prisma.facultyResearchArea.createMany({ data: values.map((item) => ({ facultyId: id, researchAreaId: item.id })), skipDuplicates: true });
+      await client.facultyResearchArea.deleteMany({ where: { facultyId: id } });
+      if (values.length) await client.facultyResearchArea.createMany({ data: values.map((item) => ({ facultyId: id, researchAreaId: item.id })), skipDuplicates: true });
     }
     if (payload.laboratorySlugs !== undefined) {
       const values = await resolveLaboratories(relationValues(payload.laboratorySlugs));
-      await prisma.facultyLaboratory.deleteMany({ where: { facultyId: id } });
-      if (values.length) await prisma.facultyLaboratory.createMany({ data: values.map((item) => ({ facultyId: id, laboratoryId: item.id })), skipDuplicates: true });
+      await client.facultyLaboratory.deleteMany({ where: { facultyId: id } });
+      if (values.length) await client.facultyLaboratory.createMany({ data: values.map((item) => ({ facultyId: id, laboratoryId: item.id })), skipDuplicates: true });
     }
   }
   if (entity === "researchAreas") {
     if (payload.facultySlugs !== undefined) {
       const values = await resolveFaculty(relationValues(payload.facultySlugs));
-      await prisma.facultyResearchArea.deleteMany({ where: { researchAreaId: id } });
-      if (values.length) await prisma.facultyResearchArea.createMany({ data: values.map((item) => ({ facultyId: item.id, researchAreaId: id })), skipDuplicates: true });
+      await client.facultyResearchArea.deleteMany({ where: { researchAreaId: id } });
+      if (values.length) await client.facultyResearchArea.createMany({ data: values.map((item) => ({ facultyId: item.id, researchAreaId: id })), skipDuplicates: true });
     }
     if (payload.departmentSlugs !== undefined) {
       const values = await resolveDepartments(relationValues(payload.departmentSlugs));
-      await prisma.departmentResearchArea.deleteMany({ where: { researchAreaId: id } });
-      if (values.length) await prisma.departmentResearchArea.createMany({ data: values.map((item) => ({ departmentId: item.id, researchAreaId: id })), skipDuplicates: true });
+      await client.departmentResearchArea.deleteMany({ where: { researchAreaId: id } });
+      if (values.length) await client.departmentResearchArea.createMany({ data: values.map((item) => ({ departmentId: item.id, researchAreaId: id })), skipDuplicates: true });
     }
   }
   if (entity === "projects") {
     if (payload.facultySlugs !== undefined) {
       const values = await resolveFaculty(relationValues(payload.facultySlugs));
-      await prisma.projectFaculty.deleteMany({ where: { projectId: id } });
-      if (values.length) await prisma.projectFaculty.createMany({ data: values.map((item) => ({ projectId: id, facultyId: item.id })), skipDuplicates: true });
+      await client.projectFaculty.deleteMany({ where: { projectId: id } });
+      if (values.length) await client.projectFaculty.createMany({ data: values.map((item) => ({ projectId: id, facultyId: item.id })), skipDuplicates: true });
     }
     if (payload.laboratorySlugs !== undefined) {
       const values = await resolveLaboratories(relationValues(payload.laboratorySlugs));
-      await prisma.projectLaboratory.deleteMany({ where: { projectId: id } });
-      if (values.length) await prisma.projectLaboratory.createMany({ data: values.map((item) => ({ projectId: id, laboratoryId: item.id })), skipDuplicates: true });
+      await client.projectLaboratory.deleteMany({ where: { projectId: id } });
+      if (values.length) await client.projectLaboratory.createMany({ data: values.map((item) => ({ projectId: id, laboratoryId: item.id })), skipDuplicates: true });
     }
   }
   if (entity === "publications" && payload.authorSlugs !== undefined) {
     const values = await resolveFaculty(relationValues(payload.authorSlugs));
-    await prisma.publicationFaculty.deleteMany({ where: { publicationId: id } });
-    if (values.length) await prisma.publicationFaculty.createMany({ data: values.map((item) => ({ publicationId: id, facultyId: item.id })), skipDuplicates: true });
+    await client.publicationFaculty.deleteMany({ where: { publicationId: id } });
+    if (values.length) await client.publicationFaculty.createMany({ data: values.map((item) => ({ publicationId: id, facultyId: item.id })), skipDuplicates: true });
   }
 }
 
-async function normalizeDatabasePayload(entity: EntityName, payload: Record<string, unknown>, id?: string, actorId?: string) {
+async function normalizeDatabasePayload(entity: EntityName, payload: Record<string, unknown>, id: string | undefined, actorId: string | undefined, client: TxClient) {
   const omit = new Set(["id", "createdAt", "updatedAt", "publishedAt", "departmentName", "departmentSlug", "status", "authorSlugs", "facultySlugs", "laboratorySlugs", "researchAreaSlugs", "departmentSlugs"]);
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(payload)) {
     if (!omit.has(key) && value !== undefined) data[key] = value;
   }
+  // The server owns publishedAt: set on transition to PUBLISHED, cleared on
+  // any other transition. Client-supplied timestamps are never trusted, which
+  // prevents stale publishedAt values on unpublished records.
   if (payload.status !== undefined) {
     data.status = payload.status;
-    data.publishedAt = payload.status === "PUBLISHED" ? (payload.publishedAt || new Date()) : null;
+    data.publishedAt = payload.status === "PUBLISHED" ? new Date() : null;
   } else if (!id && entity !== "settings" && entity !== "media") {
     data.status = "DRAFT";
   }
-  if (payload.publishedAt) data.publishedAt = payload.publishedAt;
   if (entity === "programs" && payload.approvedSeats !== undefined && payload.approvedSeats !== "") data.approvedSeats = Number(payload.approvedSeats);
   if (["achievements", "publications"].includes(entity) && payload.year !== undefined && payload.year !== "") data.year = Number(payload.year);
   if (["media", "documents"].includes(entity) && payload.sizeBytes !== undefined && payload.sizeBytes !== "") data.sizeBytes = Number(payload.sizeBytes);
-  if (entity === "faculty" && Array.isArray(payload.researchInterests)) data.researchInterests = payload.researchInterests.map(String).join("\\n");
+  if (entity === "faculty" && Array.isArray(payload.researchInterests)) data.researchInterests = payload.researchInterests.map(String).join("\n");
   if (entity === "events") {
     if (payload.startsAt) data.startsAt = new Date(String(payload.startsAt));
     else if (payload.startsAt === "") data.startsAt = null;
@@ -425,11 +543,8 @@ async function normalizeDatabasePayload(entity: EntityName, payload: Record<stri
   }
   if (entity === "publications" && !data.slug && payload.title) data.slug = slugify(String(payload.title));
   if (payload.departmentSlug && ["programs", "faculty", "laboratories", "projects", "publications", "achievements", "events", "organizations", "documents"].includes(entity)) {
-    const prisma = getPrisma();
-    if (prisma) {
-      const department = await prisma.department.findUnique({ where: { slug: String(payload.departmentSlug) }, select: { id: true } });
-      data.departmentId = department?.id;
-    }
+    const department = await client.department.findUnique({ where: { slug: String(payload.departmentSlug) }, select: { id: true } });
+    data.departmentId = department?.id;
   }
   for (const key of ["departmentSlug", "departmentName"]) delete data[key];
   if (actorId) {

@@ -31,9 +31,20 @@ Production refuses to start when `DATABASE_URL`, a 32-character minimum `AUTH_SE
    npx prisma migrate deploy
    ```
 
-   Migrations currently include the normalized schema, shared rate-limit buckets, session-version invalidation, publication department ownership and editorial attribution.
+   Migrations currently include the normalized schema, shared rate-limit buckets, session-version invalidation, publication department ownership, editorial attribution and the unique media storage-key constraint.
 
-6. Do **not** run `prisma/seed.ts` against production. Create the first named `SUPER_ADMIN` or `IET_ADMIN` through a controlled bootstrap procedure, then create additional named accounts in `/admin/users`.
+6. **First administrator bootstrap (one-time, manual).** Do **not** run `prisma/seed.ts` against production (it is development-only and self-refuses outside `NODE_ENV=development`). Create the first `SUPER_ADMIN` with the one-time bootstrap script. It is not an HTTP endpoint, it requires operator-supplied credentials, and it fails without changing anything if any `SUPER_ADMIN` already exists or the email is taken:
+
+   ```bash
+   DATABASE_URL="<production database url>" \
+   BOOTSTRAP_ADMIN_EMAIL="platform-admin@iet.example.ac.in" \
+   BOOTSTRAP_ADMIN_NAME="Platform Administrator" \
+   BOOTSTRAP_ADMIN_PASSWORD="<operator-generated, at least 12 characters, never a default>" \
+   BOOTSTRAP_I_UNDERSTAND=yes \
+   npx tsx scripts/bootstrap-admin.ts
+   ```
+
+   The script bcrypt-hashes the password (cost 12), writes a `BOOTSTRAP_SUPER_ADMIN` audit entry, and prints no secrets. Then sign in at `/admin/login` and create all further named accounts from the user administration screen. Run the script **once per database lifetime** — repeat runs refuse when a super administrator exists.
 7. Build and start:
 
    ```bash
@@ -41,7 +52,7 @@ Production refuses to start when `DATABASE_URL`, a 32-character minimum `AUTH_SE
    npm run start
    ```
 
-8. Put the process behind an HTTPS reverse proxy. Set the proxy's trusted forwarded-header behavior deliberately; never accept arbitrary client-supplied IP headers as an identity signal.
+8. Put the process behind an HTTPS reverse proxy and configure the trusted-proxy variables exactly as described in "Trusted reverse proxy configuration" below. Never accept arbitrary client-supplied IP headers as an identity signal.
 9. Perform the smoke checks in the release checklist below, including a failed configuration test in a non-production environment.
 
 ## Configuration and access controls
@@ -51,8 +62,19 @@ Production refuses to start when `DATABASE_URL`, a 32-character minimum `AUTH_SE
 - Use one account per person. Review the user list and department assignments at least quarterly and after staff changes.
 - `DEPARTMENT_ADMIN` is checked against both the record currently addressed and the requested department, including normalized faculty/laboratory/author relationships.
 - Keep `SUPER_ADMIN` rare. IET administrators cannot grant super-administrator access.
-- Production rate limits use PostgreSQL so multiple application instances share counters. Add alerting for repeated login failures and unusual admin mutation volume.
+- Production rate limits use PostgreSQL so multiple application instances share counters. Add alerting for repeated login failures and unusual admin mutation volume. Login protection is layered: 10 attempts per 15 minutes per client address, 10 attempts per 15 minutes per account, and a progressive delay (5 s per attempt after the second, capped at 30 s) applied before credentials are checked.
 - The current same-origin policy rejects state-changing requests without a matching `Origin`/`Referer` in production. Keep the reverse proxy host configuration stable and test approved administrative origins.
+
+## Trusted reverse proxy configuration
+
+Rate limiting, login brute-force protection and audit-log IP attribution all derive the client address from the **trusted proxy chain** (`lib/security.ts` → `trustedClientIp`). The application never trusts `X-Real-IP` and never trusts `X-Forwarded-For` unless a trusted-proxy topology is configured:
+
+- `TRUSTED_PROXY_COUNT` — the number of trusted reverse proxies/load balancers between clients and the application (set it to match your actual topology, e.g. `1` for a single nginx/ALB/HAProxy front).
+- `TRUSTED_PROXY_CIDRS` — comma-separated CIDRs covering the trusted proxies (e.g. `10.0.0.0/8,192.168.0.0/16`). Used to verify the trusted region of the chain; strongly recommended.
+
+Expected proxy behavior: each trusted proxy must **append** the peer address it received the request from to `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`, AWS ALB default, HAProxy `X-Forwarded-For append`). Because each trusted proxy appends a true hop to the right of any client-forged prefix, the client address is deterministically the chain entry at index `length - TRUSTED_PROXY_COUNT`; rotating forged left-hand entries cannot change it.
+
+Fail-closed behavior: if `TRUSTED_PROXY_COUNT` is unset/0, no forwarded header is ever consulted and all clients share one coarser rate-limit bucket per scope. If the chain is missing, shorter than the configured count, malformed, or its trusted region fails CIDR verification, the request is pooled into that shared `direct` bucket instead of receiving a header-derived identity. If `TRUSTED_PROXY_COUNT` is larger than the actual number of proxies, legitimate traffic degrades to the shared bucket (safe); if it is smaller, identity becomes coarser but remains unspoofable.
 
 ## Object storage and uploads
 
@@ -88,7 +110,86 @@ Use the institution's encrypted backup service rather than storing dumps in the 
 
 Enable provider versioning or replication as approved. Back up object metadata through PostgreSQL and verify that every referenced key exists. Test restoring a representative image and PDF, including MIME metadata, title, alt text and status. Do not copy production objects into a developer-owned account.
 
-## Release checklist
+## Local production smoke test (Codespaces, dev boxes, disposable VMs)
+
+### Why the server requires the full variable set at startup, even for a partial smoke
+
+`instrumentation.ts` runs `assertProductionConfig()` once when the Node.js server starts (the App Router instrumentation hook). This is intentional and is the operational layer of the fail-closed design; the per-request checks (`getSession`, `getSiteData`, the storage adapter) remain in place independently.
+
+- It validates **presence and format only**: every required variable non-empty, `AUTH_SECRET` at least 32 characters in production, `NEXT_PUBLIC_SITE_URL` a valid `https://` URL. It never connects to PostgreSQL or object storage, so startup is cheap.
+- It is **all-or-nothing by design**: in production mode the application has no fallback paths (demo auth, the file-backed content store and the local upload adapter are development-only). Every request class the server may receive needs a subsystem — public content needs the database, sessions need the signing secret, uploads and media delivery need storage. A partially configured production server would serve some routes and 500 on others, which is strictly worse than refusing to boot. So the complete set is required even when the smoke only exercises a subset (e.g. only `/admin/login` and the `/admin` redirect).
+- **Reachability is enforced on first use, not at startup**: with a syntactically valid but unreachable `DATABASE_URL`, the server starts, but the first public page request fails closed with a database error. The same applies to storage on the first upload or media delivery.
+- The only legitimate way to run with fewer variables is a **non-production** server (`next dev`), where none of these checks apply.
+
+### Required variables for `npm run start` (production mode)
+
+| Variable | Rule at startup | Purpose |
+|---|---|---|
+| `DATABASE_URL` | required, non-empty | PostgreSQL connection string. All content, users, sessions, audit and rate-limit buckets are database-backed in production. Must point to an **actually reachable** database for any content-serving smoke. |
+| `AUTH_SECRET` | required, ≥ 32 characters in production | HS256 signing key for session JWTs. Generate locally with `openssl rand -hex 32`. Never commit it. |
+| `NEXT_PUBLIC_SITE_URL` | required, valid `https://` URL in production | Canonical site URL (metadata base, Open Graph, JSON-LD). Use the smoke environment's HTTPS URL (e.g. the Codespace preview URL). Note: the client-side JSON-LD usage is inlined at build time, so its value only changes on rebuild — cosmetic. |
+| `STORAGE_ENDPOINT` | required, non-empty | S3-compatible endpoint. |
+| `STORAGE_BUCKET` | required, non-empty | Bucket name for media/document objects. |
+| `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` | required, non-empty | Object-storage credentials for a real compatible service when the smoke includes uploads or media delivery; presence-only when it does not. |
+| `STORAGE_FORCE_PATH_STYLE` | optional (`false`) | Set `true` for path-style S3 emulators such as MinIO. |
+| `STORAGE_REGION` | optional (`auto`) | e.g. `us-east-1` for MinIO. |
+| `STORAGE_PUBLIC_BASE_URL` | optional | Public base URL for objects, if different from the endpoint. |
+| `TRUSTED_PROXY_COUNT` / `TRUSTED_PROXY_CIDRS` | optional (see above section) | Leave unset for a directly-exposed local smoke; all clients then share one coarser rate-limit bucket per scope (safe, documented). |
+| `ALLOW_DEMO_AUTH`, `DEMO_ADMIN_*`, `ALLOW_LOCAL_SEED`, `SEED_ADMIN_*` | **keep unset** in production mode | Development-only switches; demo auth is additionally gated to non-production and cannot be enabled here. |
+
+Shell variables always win over `.env*` files, and `next start` (production) loads, in order: `process.env` → `.env.production.local` → `.env.local` → `.env.production` → `.env`. In this repository `.env` and `.env.local` are gitignored, so the two safe Codespace-only options are:
+
+- **`.env.local`** in the repository root (gitignored, never committed) — the standard Next.js location for local values; or
+- **shell exports** in the Codespace terminal immediately before `npm run start` — no file at all.
+
+Never write smoke credentials to `.env.production`, `.env.example` or any tracked file, and never commit a generated `AUTH_SECRET`.
+
+### Safe Codespace-only setup (disposable, local, no committed secrets)
+
+```bash
+# 1. Real local PostgreSQL (satisfies "actually reachable database").
+sudo apt-get update && sudo apt-get install -y postgresql
+sudo service postgresql start
+sudo -u postgres psql -c "CREATE ROLE iet_smoke LOGIN PASSWORD 'iet-smoke-only'"
+sudo -u postgres createdb --owner=iet_smoke iet_smoke
+export DATABASE_URL="postgresql://iet-smoke-only:iet-smoke-only@localhost:5432/iet_smoke"
+
+# 2. Generate the Prisma client and apply migrations (network is available in Codespaces).
+npm ci && npm run db:generate
+npx prisma migrate deploy
+
+# 3. One-time super-admin bootstrap against the disposable database.
+export BOOTSTRAP_ADMIN_EMAIL="smoke-admin@localhost"
+export BOOTSTRAP_ADMIN_NAME="Smoke Test Administrator"
+export BOOTSTRAP_ADMIN_PASSWORD="$(openssl rand -base64 18)"
+export BOOTSTRAP_I_UNDERSTAND=yes
+npx tsx scripts/bootstrap-admin.ts
+
+# 4. Real local S3-compatible storage (only needed for the upload/media part of the smoke).
+curl -fsSL https://dl.min.io/server/minio/release/linux-amd64/minio -o /tmp/minio && chmod +x /tmp/minio
+MINIO_ROOT_USER="smoke" MINIO_ROOT_PASSWORD="$(openssl rand -hex 12)" \
+  /tmp/minio server /tmp/minio-data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001 &
+export STORAGE_ENDPOINT="http://localhost:9000"
+export STORAGE_BUCKET="iet-smoke"
+export STORAGE_ACCESS_KEY="smoke"
+export STORAGE_SECRET_KEY="<the MINIO_ROOT_PASSWORD you generated>"
+export STORAGE_REGION="us-east-1"
+export STORAGE_FORCE_PATH_STYLE="true"
+# create the bucket once via the MinIO console at http://localhost:9001 or `mc mb local/iet-smoke`
+
+# 5. Remaining required variables.
+export AUTH_SECRET="$(openssl rand -hex 32)"
+export NEXT_PUBLIC_SITE_URL="<your Codespace preview https URL for port 3000>"
+
+# 6. Build and start; run the smoke checks below.
+npm run build && npm run start
+```
+
+Smoke checks on the running production-mode server: public homepage and department/programme pages return 200 with database content; `/api/search?q=engineering` returns published records only; `/admin` redirects unauthenticated visitors to `/admin/login`; login with the bootstrapped administrator works and sets an HTTP-only cookie; logout removes it; upload a test image and a test PDF and confirm they are stored in MinIO, recorded in the database, and served by the media route with the correct disposition; an unknown media key returns 404.
+
+**This is a disposable smoke environment, not a production deployment, and does not make the application production-ready.** Production requires institution-owned PostgreSQL, object storage, the HTTPS reverse proxy with trusted-proxy configuration, secret management and the full release checklist.
+
+
 
 - [ ] `npm ci`, `npm run db:generate`, `npx prisma migrate deploy`, `npm run build` succeed in the release environment.
 - [ ] App refuses to start in a disposable production-mode test when a required variable is removed.
