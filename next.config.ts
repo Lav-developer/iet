@@ -18,6 +18,10 @@ const contentSecurityPolicy = [
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  // Dev-only: allow the sandbox/preview proxy hosts so development resources
+  // (e.g. HMR) are reachable when the app is previewed through a cross-origin
+  // host. Has no effect in production.
+  allowedDevOrigins: ["*.e2b.app", "*.codespace.dev", "*.cs.github.dev"],
   async headers() {
     return [{
       source: "/:path*",
