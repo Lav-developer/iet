@@ -4,6 +4,17 @@ import type { EntityName } from "@/lib/types";
 
 export const entityValues = ["departments", "programs", "faculty", "laboratories", "researchAreas", "projects", "publications", "achievements", "events", "organizations", "pages", "links", "contacts", "settings", "media", "documents"] as const;
 export const entitySchema = z.enum(entityValues);
+
+/**
+ * Pure entity-name guard shared across the server/client boundary. Server
+ * components use it to validate dynamic route params; client components may
+ * reuse it. It has no client-only dependencies, so importing it from either
+ * side is safe (never import callable utilities from a "use client" module
+ * into a Server Component).
+ */
+export function isEntityName(value: string): value is EntityName {
+  return (entityValues as readonly string[]).includes(value);
+}
 export const statusValues = new Set(["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"]);
 export const departmentScoped = new Set(["programs", "faculty", "laboratories", "projects", "publications", "achievements", "events", "organizations", "documents"]);
 

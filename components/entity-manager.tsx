@@ -55,7 +55,7 @@ const configs: Record<EntityName, { title: string; description: string; titleFie
   ] },
 };
 
-export function isEntityName(value: string): value is EntityName { return value in configs; }
+export { isEntityName } from "@/lib/content-policy";
 
 export function EntityManager({ entity }: { entity: EntityName }) {
   const config = configs[entity]; const [records, setRecords] = useState<any[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [editing, setEditing] = useState<any | null>(null); const [saving, setSaving] = useState(false); const [message, setMessage] = useState(""); const [page, setPage] = useState(1); const [total, setTotal] = useState(0); const [totalPages, setTotalPages] = useState(1);
