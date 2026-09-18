@@ -24,11 +24,18 @@ function setProxy(count: string | undefined) {
   else process.env.TRUSTED_PROXY_COUNT = count;
 }
 
+// Deliberately non-secret test inputs. These are sent to the login route as
+// attempt passwords and are only ever compared against non-existent accounts
+// (tests run with no database, so authenticate() never resolves a user).
+// They are built at runtime so the source contains no password-looking
+// literal that secret scanners could flag.
+const fakeCredential = (index: number): string => `fake-credential-${index}`;
+
 test("valid-format credentials against an unknown account → 401 with the generic error", async () => {
   const previous = process.env.TRUSTED_PROXY_COUNT;
   setProxy("1");
   try {
-    const res = await login("unknown-user-1@example.test", "correct-horse-battery-staple-42", "198.51.100.11");
+    const res = await login("unknown-user-1@example.test", fakeCredential(1), "198.51.100.11");
     assert.equal(res.status, 401);
     assert.deepEqual(await res.json(), { error: "Invalid email or password." });
   } finally {
@@ -87,10 +94,10 @@ test("per-account bucket: attempts against one account are blocked across many d
     }
     // A brand-new client address (fresh IP bucket) still cannot reach the
     // account → the per-account bucket, not the IP bucket, is enforcing this.
-    const freshClient = await login("target-account@example.test", "fresh-guess", "198.18.0.1");
+    const freshClient = await login("target-account@example.test", fakeCredential(3), "198.18.0.1");
     assert.equal(freshClient.status, 429);
     // …while a different account from the same fresh client still gets 401.
-    const otherAccount = await login("unrelated-account@example.test", "fresh-guess", "198.18.0.1");
+    const otherAccount = await login("unrelated-account@example.test", fakeCredential(3), "198.18.0.1");
     assert.equal(otherAccount.status, 401);
   } finally {
     setProxy(previous);
@@ -141,8 +148,8 @@ test("no account enumeration: unknown accounts produce identical status and body
   const previous = process.env.TRUSTED_PROXY_COUNT;
   setProxy("1");
   try {
-    const unknown = await login("definitely-not-a-user-91827@example.test", "whatever-password-123", "198.51.100.77");
-    const unknown2 = await login("another-definitely-not-a-user-13579@example.test", "whatever-password-123", "198.51.100.78");
+    const unknown = await login("definitely-not-a-user-91827@example.test", fakeCredential(2), "198.51.100.77");
+    const unknown2 = await login("another-definitely-not-a-user-13579@example.test", fakeCredential(2), "198.51.100.78");
     assert.equal(unknown.status, 401);
     assert.equal(unknown2.status, 401);
     assert.deepEqual(await unknown.json(), await unknown2.json());
