@@ -371,3 +371,13 @@ p { margin: 0 0 15px; }
   .admin-stat strong { font-size: 1.6rem; }
   .login-card { padding: 26px 20px; }
 }
+
+/* Profile assets and long academic titles must stay within narrow screens. */
+.profile-photo { object-fit: cover; width: 80px; height: 80px; }
+.data-card, .profile-card, .dept-card, .info-aside { min-width: 0; overflow-wrap: anywhere; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+[id] { scroll-margin-top: 110px; }
+@media (max-width: 500px) {
+  .filter-bar input, .filter-bar select { min-width: 0; width: 100%; max-width: 100%; }
+  .form-field input[type="file"] { max-width: 100%; }
+}

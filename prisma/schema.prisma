@@ -101,6 +101,11 @@ model FacultyMember {
   id                String                @id @default(cuid())
   slug              String                @unique
   name              String
+  profileImageId    String?
+  profileImage      Media? @relation("FacultyProfileImage", fields: [profileImageId], references: [id], onDelete: SetNull)
+  cvUrl             String?
+  cvDocumentId      String?
+  cvDocument        Document? @relation("FacultyCV", fields: [cvDocumentId], references: [id], onDelete: SetNull)
   designation       String
   email             String?
   phone             String?
@@ -123,6 +128,8 @@ model FacultyMember {
 
   @@index([departmentId])
   @@index([designation])
+  @@index([profileImageId])
+  @@index([cvDocumentId])
   @@index([status])
   @@index([name])
 }
@@ -384,6 +391,7 @@ model Media {
   updatedById  String?
   updatedAt    DateTime      @updatedAt
   achievements Achievement[]
+  facultyProfiles FacultyMember[] @relation("FacultyProfileImage")
 
   @@index([mimeType])
 }
@@ -406,6 +414,7 @@ model Document {
   updatedAt    DateTime      @updatedAt
   department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   page         Page?         @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  facultyCVs   FacultyMember[] @relation("FacultyCV")
 
   @@index([departmentId])
   @@index([pageId])

@@ -6,7 +6,7 @@ export function PageHeader({ eyebrow, title, description, breadcrumbs = [] }: { 
   return (
     <section className="page-hero">
       <div className="container">
-        <div className="breadcrumbs"><Link href="/">IET</Link>{breadcrumbs.map((item, index) => <span key={`${item.label}-${index}`}>/ {item.href ? <Link href={item.href}>{item.label}</Link> : item.label}</span>)}</div>
+        <nav className="breadcrumbs" aria-label="Breadcrumb"><Link href="/">IET</Link>{breadcrumbs.map((item, index) => <span key={`${item.label}-${index}`}>/ {item.href ? <Link href={item.href}>{item.label}</Link> : <span aria-current="page">{item.label}</span>}</span>)}</nav>
         <div className="eyebrow inverse">{eyebrow}</div>
         <h1>{title}</h1>
         <p className="lead">{description}</p>
@@ -27,11 +27,12 @@ export function SourceNote({ children }: { children: React.ReactNode }) {
   return <div className="source-note"><strong>Content provenance</strong><br />{children}</div>;
 }
 
-export function EmptyState({ title = "No approved records yet", description = "An IET administrator can add and publish this information through the CMS." }: { title?: string; description?: string }) {
+export function EmptyState({ title = "No information to display yet", description = "Please check back for updates." }: { title?: string; description?: string }) {
   return <div className="empty-state"><strong>{title}</strong><span>{description}</span></div>;
 }
 
-export function Avatar({ name }: { name: string }) {
+export function Avatar({ name, image }: { name: string; image?: { url: string; altText: string } }) {
+  if (image) return <img className="profile-avatar profile-photo" src={image.url} alt={image.altText || `Portrait of ${name}`} width={80} height={80} loading="lazy" />;
   const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
   return <div className="profile-avatar" aria-hidden="true">{initials}</div>;
 }

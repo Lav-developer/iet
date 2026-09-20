@@ -1,8 +1,13 @@
-import Link from "next/link";
-import { ArrowUpRight, FolderKanban } from "lucide-react";
-import { EmptyState, PageHeader, SectionHeading, SourceNote } from "@/components/ui";
+import { ProjectCard } from "@/components/content-cards";
+import { EmptyState, PageHeader } from "@/components/ui";
 import { getSiteData } from "@/lib/store";
 
-export const metadata = { title: "Projects", description: "IET research and innovation project records, connected to faculty, departments and laboratories." };
+export const metadata = { title: "Research projects", description: "Explore research and innovation projects at IET." };
 
-export default async function ProjectsPage() { const data = await getSiteData(); return <><PageHeader eyebrow="Research & innovation" title="Projects with the relationships intact." description="Publish approved projects with investigators, department, sponsor, laboratory and status metadata. No project is inferred where the source is silent." breadcrumbs={[{ label: "Research", href: "/research" }, { label: "Projects" }]} /><section className="section"><div className="container"><SectionHeading eyebrow="Project register" title="The public register is honest." />{data.projects.length ? <div className="data-grid">{data.projects.map((project) => <div className="data-card" key={project.id}><FolderKanban size={23} color="var(--copper)" /><h3>{project.title}</h3><p>{project.summary}</p>{project.departmentName && <span className="small">{project.departmentName}</span>}</div>)}</div> : <EmptyState title="No approved project records are published" description="Add a verified project through the CMS; connect faculty and laboratories after the relationships are confirmed." />}<div style={{ marginTop: 28 }}><SourceNote>The supplied IET-DSMNRU profile PDF names research directions but does not provide an approved project register. Draft placeholder records stay private to the CMS.</SourceNote></div></div></section><section className="section soft"><div className="container" style={{ display: "flex", justifyContent: "space-between", gap: 25, alignItems: "center", flexWrap: "wrap" }}><div><div className="eyebrow">Structured research</div><h2 style={{ marginTop: 8 }}>Add once. Discover from four routes.</h2><p className="lead" style={{ fontSize: ".95rem" }}>A project can surface from its department, faculty, lab or research area without duplicate copy.</p></div><Link href="/admin/content/projects" className="button">Manage project records <ArrowUpRight size={15} /></Link></div></section></>; }
+export default async function Page() {
+  const data = await getSiteData();
+  return <><PageHeader eyebrow="Research & innovation" title="Research projects" description="Explore research and innovation projects at IET." breadcrumbs={[{ label: "Research projects" }]} />
+    <section className="section"><div className="container">
+      {data.projects.length ? <div className="data-grid">{data.projects.map((item) => <ProjectCard key={item.id} project={item} />)}</div> : <EmptyState title="No projects to display yet" />}
+    </div></section></>;
+}

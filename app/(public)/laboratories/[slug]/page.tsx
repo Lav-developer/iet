@@ -1,11 +1,28 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowUpRight, FlaskConical } from "lucide-react";
-import { EmptyState, PageHeader, SectionHeading, SourceNote, VerificationBadge } from "@/components/ui";
+import { EmptyState, PageHeader, SectionHeading } from "@/components/ui";
+import { ProjectCard } from "@/components/content-cards";
 import { getSiteData } from "@/lib/store";
-
 export const dynamic = "force-dynamic";
-
-export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) { const { slug } = await params; const data = await getSiteData(); const lab = data.laboratories.find((item) => item.slug === slug); return { title: lab?.name || "Laboratory", description: lab?.description || "IET laboratory record" }; }
-
-export default async function LaboratoryPage({ params }: { params: Promise<{ slug: string }> }) { const { slug } = await params; const data = await getSiteData(); const lab = data.laboratories.find((item) => item.slug === slug); if (!lab) notFound(); const department = data.departments.find((item) => item.slug === lab.departmentSlug); const people = data.faculty.filter((item) => item.departmentSlug === lab.departmentSlug && item.type === "FACULTY").slice(0, 5); return <><PageHeader eyebrow="Facility record" title={lab.name} description={lab.description} breadcrumbs={[{ label: "Laboratories", href: "/laboratories" }, { label: lab.name }]} /><section className="section"><div className="container"><div className="detail-layout"><div><section className="detail-section"><VerificationBadge status={lab.status} /><div style={{ display: "flex", gap: 17, marginTop: 22, alignItems: "center" }}><FlaskConical size={32} color="var(--copper)" /><p className="lead" style={{ fontSize: ".98rem", margin: 0 }}>A structured laboratory record for IET — ready to carry approved equipment, course and research information.</p></div></section><section className="detail-section"><SectionHeading eyebrow="Facility data" title="What the CMS can hold" /><div className="data-grid"><div className="data-card"><span className="eyebrow">Equipment</span><h3>{lab.equipment || "Awaiting official inventory"}</h3><p>Editors can add an itemized list with media and maintenance metadata.</p></div><div className="data-card"><span className="eyebrow">Courses supported</span><h3>{lab.courses || "Awaiting approved course mapping"}</h3></div><div className="data-card"><span className="eyebrow">Research relevance</span><h3>{lab.researchRelevance || "Awaiting approved research mapping"}</h3></div></div></section><section className="detail-section"><SectionHeading eyebrow="Connected faculty" title="People" />{people.length ? <div className="data-grid">{people.map((person) => <Link href={`/faculty/${person.slug}`} className="data-card" key={person.id}><h3>{person.name}</h3><p>{person.designation}</p><span className="link-arrow">Open profile</span></Link>)}</div> : <EmptyState title="No faculty relationship published" />}</section><section className="detail-section"><SectionHeading eyebrow="Related work" title="Projects & gallery" /> <EmptyState title="No approved project or gallery media yet" description="A lab administrator can link projects and upload accessible media through the CMS." /></section></div><aside className="info-aside"><div className="aside-card"><h3>Department</h3>{department ? <><div className="aside-item"><strong>Unit</strong>{department.name}</div><Link href={`/departments/${department.slug}`} className="link-arrow">Open department</Link></> : <p className="small">Department relationship awaiting CMS completion.</p>}</div><Link href="/admin/content/laboratories" className="button secondary" style={{ width: "100%" }}>Edit in CMS <ArrowUpRight size={15} /></Link><SourceNote>Facility headings are sourced from the supplied IET profile. Inventory and capacity are intentionally not fabricated.</SourceNote></aside></div></div></section></>; }
+type Props = { params: Promise<{ slug: string }> };
+export async function generateMetadata({ params }: Props) {
+  const { slug } = await params; const data = await getSiteData(); const lab = data.laboratories.find((item) => item.slug === slug);
+  return { title: lab?.name || "Laboratory not found", description: lab?.description };
+}
+export default async function LaboratoryPage({ params }: Props) {
+  const { slug } = await params; const data = await getSiteData(); const lab = data.laboratories.find((item) => item.slug === slug);
+  if (!lab) notFound();
+  const department = data.departments.find((item) => item.slug === lab.departmentSlug);
+  const people = data.faculty.filter((item) => item.laboratorySlugs?.includes(lab.slug));
+  const programs = data.programs.filter((item) => item.laboratorySlugs?.includes(lab.slug));
+  const projects = data.projects.filter((item) => item.laboratorySlugs?.includes(lab.slug));
+  const details = [["Equipment", lab.equipment], ["Courses supported", lab.courses], ["Research relevance", lab.researchRelevance]].filter(([, value]) => value);
+  return <><PageHeader eyebrow="Facilities" title={lab.name} description={lab.description} breadcrumbs={[{ label: "Laboratories", href: "/laboratories" }, { label: lab.name }]} />
+    <section className="section"><div className="container detail-layout"><div>
+      {details.length > 0 && <section className="detail-section"><SectionHeading eyebrow="Facilities" title="Laboratory information" /><div className="data-grid">{details.map(([label, value]) => <div className="data-card" key={label}><h3>{label}</h3><p style={{ whiteSpace: "pre-line" }}>{value}</p></div>)}</div></section>}
+      {people.length > 0 && <section className="detail-section"><h2>Faculty &amp; staff</h2><div className="data-grid">{people.map((person) => <Link href={`/faculty/${person.slug}`} className="data-card" key={person.id}><h3>{person.name}</h3><p>{person.designation}</p><span className="link-arrow">Open profile</span></Link>)}</div></section>}
+      {programs.length > 0 && <section className="detail-section"><h2>Programmes</h2><div className="cta-row">{programs.map((program) => <Link className="link-arrow" href={`/programs/${program.slug}`} key={program.id}>{program.title}</Link>)}</div></section>}
+      {projects.length > 0 && <section className="detail-section"><h2>Projects</h2><div className="data-grid">{projects.map((project) => <ProjectCard project={project} key={project.id} />)}</div></section>}
+      {!details.length && !people.length && !programs.length && !projects.length && <EmptyState title="More laboratory information will be added here" />}
+    </div><aside className="info-aside">{department && <div className="aside-card"><h2>Department</h2><Link href={`/departments/${department.slug}`} className="link-arrow">{department.name}</Link></div>}<Link href="/laboratories" className="link-arrow">Back to Laboratories</Link></aside></div></section></>;
+}

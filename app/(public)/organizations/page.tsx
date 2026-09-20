@@ -1,7 +1,13 @@
-import { Users } from "lucide-react";
-import { EmptyState, PageHeader, SectionHeading, SourceNote } from "@/components/ui";
+import { OrganizationCard } from "@/components/content-cards";
+import { EmptyState, PageHeader } from "@/components/ui";
 import { getSiteData } from "@/lib/store";
 
-export const metadata = { title: "Student organizations", description: "IET student organizations, clubs and chapters — maintained through the CMS." };
+export const metadata = { title: "Student organizations", description: "Explore technical clubs, chapters and student groups at IET." };
 
-export default async function OrganizationsPage() { const data = await getSiteData(); return <><PageHeader eyebrow="Campus life" title="Student organizations with a proper home." description="A structured space for technical clubs, chapters, student groups and activity contacts — without inventing names that are not in the approved source." breadcrumbs={[{ label: "Campus", href: "/campus" }, { label: "Organizations" }]} /><section className="section"><div className="container"><SectionHeading eyebrow="Organizations" title="Published groups" />{data.organizations.length ? <div className="data-grid">{data.organizations.map((organization) => <div className="data-card" key={organization.id}><Users size={24} color="var(--copper)" /><h3>{organization.name}</h3><p>{organization.description}</p></div>)}</div> : <EmptyState title="No student organizations are published" description="An IET administrator can add a group, chapter or club with its description, department association and official contact channel." />}<div style={{ marginTop: 28 }}><SourceNote>The supplied IET profile PDF does not include an approved student-organization list. No group name is fabricated.</SourceNote></div></div></section></>; }
+export default async function Page() {
+  const data = await getSiteData();
+  return <><PageHeader eyebrow="Campus life" title="Student organizations" description="Explore technical clubs, chapters and student groups at IET." breadcrumbs={[{ label: "Student organizations" }]} />
+    <section className="section"><div className="container">
+      {data.organizations.length ? <div className="data-grid">{data.organizations.map((item) => <OrganizationCard key={item.id} organization={item} />)}</div> : <EmptyState title="No organizations to display yet" />}
+    </div></section></>;
+}

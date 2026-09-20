@@ -24,13 +24,13 @@ export type RecordSnapshot = Record<string, unknown> | undefined;
 const allowedFields: Record<string, Set<string>> = {
   departments: new Set(["name", "shortName", "slug", "overview", "established", "sourceNote", "status"]),
   programs: new Set(["title", "shortTitle", "slug", "level", "duration", "approvedSeats", "summary", "eligibility", "admissionNote", "sourceNote", "departmentSlug", "laboratorySlugs", "status"]),
-  faculty: new Set(["name", "slug", "designation", "email", "phone", "qualification", "profile", "researchInterests", "researchAreaSlugs", "laboratorySlugs", "departmentSlug", "type", "status"]),
+  faculty: new Set(["name", "slug", "designation", "profileImageId", "cvUrl", "cvDocumentId", "email", "phone", "qualification", "profile", "researchInterests", "researchAreaSlugs", "laboratorySlugs", "departmentSlug", "type", "status"]),
   laboratories: new Set(["name", "slug", "description", "equipment", "courses", "researchRelevance", "departmentSlug", "status"]),
   researchAreas: new Set(["name", "slug", "description", "sourceNote", "facultySlugs", "departmentSlugs", "status"]),
   projects: new Set(["title", "slug", "summary", "sponsor", "departmentSlug", "facultySlugs", "laboratorySlugs", "status"]),
   publications: new Set(["title", "slug", "venue", "year", "doi", "url", "abstract", "departmentSlug", "authorSlugs", "status"]),
   achievements: new Set(["title", "category", "description", "recipient", "year", "eventName", "departmentSlug", "status"]),
-  events: new Set(["title", "slug", "summary", "startsAt", "endsAt", "location", "registrationUrl", "departmentSlug", "status"]),
+  events: new Set(["title", "slug", "summary", "startsAt", "endsAt", "location", "registrationUrl", "organizationId", "departmentSlug", "status"]),
   organizations: new Set(["name", "slug", "description", "contactUrl", "departmentSlug", "status"]),
   pages: new Set(["title", "slug", "excerpt", "body", "locale", "status"]),
   links: new Set(["label", "url", "description", "owner", "order", "status"]),
@@ -150,8 +150,17 @@ export function validatePayload(entity: EntityName, data: Record<string, unknown
     if (key === "url" && ["media", "documents"].includes(entity) && value.startsWith("/api/media/")) continue;
     try {
       const parsed = new URL(value);
-      if (!["http:", "https:"].includes(parsed.protocol)) throw new Error();
+      if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || /[\u0000-\u0020\u007f]/.test(value)) throw new Error();
     } catch { throw new Error(`INVALID_INPUT: ${key} must be an HTTP or HTTPS URL.`); }
+  }
+  if (data.cvUrl) {
+    try {
+      const url = new URL(String(data.cvUrl));
+      if (url.protocol !== "https:" || url.username || url.password || /[\u0000-\u0020\u007f]/.test(String(data.cvUrl))) throw new Error();
+    } catch { throw new Error("INVALID_INPUT: CV URL must be a valid HTTPS URL without credentials."); }
+  }
+  for (const key of ["profileImageId", "cvDocumentId", "organizationId"]) {
+    if (data[key] !== undefined && data[key] !== null && (typeof data[key] !== "string" || String(data[key]).length > 200)) throw new Error(`INVALID_INPUT: Invalid ${key}.`);
   }
   if (data.email) {
     const email = String(data.email);

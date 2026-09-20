@@ -34,6 +34,11 @@ export type FacultyMember = {
   slug: string;
   name: string;
   designation: string;
+  profileImageId?: string | null;
+  profileImage?: { url: string; altText: string };
+  cvUrl?: string | null;
+  cvDocumentId?: string | null;
+  cv?: { url: string; external: boolean };
   email?: string;
   phone?: string;
   qualification?: string;
@@ -122,6 +127,7 @@ export type EventItem = {
   endsAt?: string | Date | null;
   location?: string;
   registrationUrl?: string;
+  organizationId?: string | null;
   departmentSlug?: string;
   departmentName?: string;
   status: ContentStatus;

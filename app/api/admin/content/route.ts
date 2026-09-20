@@ -1,3 +1,4 @@
+import { validateAssetRelations } from "@/lib/faculty-relations";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin, type SessionUser } from "@/lib/auth";
@@ -62,6 +63,7 @@ export async function POST(request: Request) {
     validatePayload(entity, data);
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
     if (!canAccess(user, entity, "write", data, undefined, assignedDepartmentSlug) || !workflowTransitionAllowed(user, undefined, data.status) || !(await departmentRelationsAllowed(user, entity, data))) return NextResponse.json({ error: "Your role cannot create this record, use that workflow transition, or its relationships are outside the assigned department." }, { status: 403 });
+    await validateAssetRelations(user, entity, data, getSingleEntityRecord, assignedDepartmentSlug);
     const record = await upsertEntity(entity, data, user.email, undefined, user.id, user.role, requestIp(request));
     return NextResponse.json({ record }, { status: 201 });
   } catch (error) {
@@ -85,6 +87,7 @@ export async function PATCH(request: Request) {
     validatePayload(entity, data);
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
     if (!canAccess(user, entity, "write", data, current, assignedDepartmentSlug) || !workflowTransitionAllowed(user, current, data.status) || !(await departmentRelationsAllowed(user, entity, data))) return NextResponse.json({ error: "Your role cannot update this record, use that workflow transition, or its relationships are outside the assigned department." }, { status: 403 });
+    await validateAssetRelations(user, entity, data, getSingleEntityRecord, assignedDepartmentSlug, current);
     const record = await upsertEntity(entity, data, user.email, body.id, user.id, user.role, requestIp(request));
     return NextResponse.json({ record });
   } catch (error) {

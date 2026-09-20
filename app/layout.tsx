@@ -7,7 +7,7 @@ export const metadata: Metadata = {
     default: "IET-DSMNRU | Faculty of Engineering & Technology",
     template: "%s | IET-DSMNRU",
   },
-  description: "The institutional information platform for the Institute / Faculty of Engineering & Technology at Dr. Shakuntala Misra National Rehabilitation University, Lucknow.",
+  description: "The official website of the Institute of Engineering & Technology at Dr. Shakuntala Misra National Rehabilitation University, Lucknow.",
   openGraph: {
     type: "website",
     title: "IET-DSMNRU | Faculty of Engineering & Technology",

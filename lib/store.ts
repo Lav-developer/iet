@@ -1,3 +1,5 @@
+import { publicCopy } from "@/lib/public-copy";
+import { facultyAssets } from "@/lib/public-content";
 import { seedData } from "@/data/seed";
 import { databaseConfigured, getPrisma } from "@/lib/db";
 import { assertProductionConfig, isProduction } from "@/lib/config";
@@ -92,10 +94,13 @@ function assertDataStoreAvailable() {
 
 export async function getSiteData(options?: { includeDrafts?: boolean }): Promise<SiteData> {
   assertDataStoreAvailable();
-  if (databaseConfigured) return getDatabaseData(options?.includeDrafts ?? false);
+  if (databaseConfigured) {
+    const data = await getDatabaseData(options?.includeDrafts ?? false);
+    return options?.includeDrafts ? data : preparePublicData(data);
+  }
 
   const data = readDemoStore();
-  if (!options?.includeDrafts) return filterPublished(data);
+  if (!options?.includeDrafts) return preparePublicData(filterPublished(data));
   return data;
 }
 
@@ -247,6 +252,27 @@ async function appendAudit(entry: Omit<AuditEntry, "id" | "timestamp">) {
   await appendAuditEntry(prisma, entry);
 }
 
+/** Remove internal fields and raw Prisma relation objects before client serialization. */
+export function preparePublicData(data: SiteData): SiteData {
+  const result = filterPublished(data);
+  for (const collection of Object.keys(result) as EntityName[]) {
+    if (collection === "settings") { result.settings = []; continue; }
+    (result[collection] as unknown[]) = (result[collection] as unknown as Record<string, unknown>[]).map((row) => {
+      const clean = { ...row };
+      for (const key of ["sourceNote", "createdById", "updatedById", "department", "researchAreas", "laboratories", "faculty", "departments", "authors", "organization", "profileImage", "cvDocument"]) delete clean[key];
+      if (clean.departmentSlug && !result.departments.some((d) => d.slug === clean.departmentSlug)) {
+        delete clean.departmentName; delete clean.departmentSlug;
+      }
+      for (const [key, value] of Object.entries(clean)) {
+        if (typeof value === "string") clean[key] = publicCopy(value);
+      }
+      return clean;
+    });
+  }
+  result.faculty = result.faculty.map((person) => ({ ...person, ...facultyAssets(person, result) }));
+  return result;
+}
+
 function filterPublished(data: SiteData): SiteData {
   const published = <T extends { status: string }>(items: T[]) => items.filter((item) => item.status === "PUBLISHED");
   return {
@@ -288,7 +314,7 @@ function mapFacultyRow(item: {
     ...item,
     departmentSlug: item.department?.slug,
     departmentName: item.department?.name,
-    researchInterests: item.researchAreas?.length ? item.researchAreas.map((area) => area.researchArea.name) : (item.researchInterests ? item.researchInterests.split("\n").filter(Boolean) : []),
+    researchInterests: item.researchInterests ? item.researchInterests.split("\n").filter(Boolean) : [],
     researchAreaSlugs: (item.researchAreas || []).map((area) => area.researchArea.slug),
     laboratorySlugs: (item.laboratories || []).map((join) => join.laboratory.slug),
   };
@@ -534,6 +560,9 @@ async function normalizeDatabasePayload(entity: EntityName, payload: Record<stri
   if (entity === "programs" && payload.approvedSeats !== undefined && payload.approvedSeats !== "") data.approvedSeats = Number(payload.approvedSeats);
   if (["achievements", "publications"].includes(entity) && payload.year !== undefined && payload.year !== "") data.year = Number(payload.year);
   if (["media", "documents"].includes(entity) && payload.sizeBytes !== undefined && payload.sizeBytes !== "") data.sizeBytes = Number(payload.sizeBytes);
+  for (const key of ["profileImageId", "cvDocumentId", "organizationId"]) {
+    if (payload[key] === "") data[key] = null;
+  }
   if (entity === "faculty" && Array.isArray(payload.researchInterests)) data.researchInterests = payload.researchInterests.map(String).join("\n");
   if (entity === "events") {
     if (payload.startsAt) data.startsAt = new Date(String(payload.startsAt));
@@ -563,7 +592,7 @@ export async function searchSite(query: string): Promise<SearchRecord[]> {
   if (databaseConfigured) {
     const prisma = getPrisma();
     if (!prisma) throw new Error("DATABASE_URL is required in production.");
-    return prisma.$queryRaw<SearchRecord[]>`
+    const results = await prisma.$queryRaw<SearchRecord[]>`
       SELECT id, 'Department' AS type, name AS title, overview AS description,
         '/departments/' || slug AS href, "shortName" AS meta
       FROM "Department" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', name, overview, "shortName")) @@ websearch_to_tsquery('simple', ${normalized})
@@ -577,37 +606,42 @@ export async function searchSite(query: string): Promise<SearchRecord[]> {
       SELECT id, 'Laboratory', name, description, '/laboratories/' || slug, NULL
       FROM "Laboratory" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', name, description, equipment, courses, "researchRelevance")) @@ websearch_to_tsquery('simple', ${normalized})
       UNION ALL
-      SELECT id, 'Research area', name, description, '/research#' || slug, "sourceNote"
-      FROM "ResearchArea" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', name, description, "sourceNote")) @@ websearch_to_tsquery('simple', ${normalized})
+      SELECT id, 'Research area', name, description, '/research#' || slug, NULL
+      FROM "ResearchArea" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', name, description)) @@ websearch_to_tsquery('simple', ${normalized})
       UNION ALL
-      SELECT id, 'Project', title, summary, '/research', sponsor
+      SELECT id, 'Project', title, summary, '/projects#' || slug, sponsor
       FROM "Project" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', title, summary, sponsor)) @@ websearch_to_tsquery('simple', ${normalized})
       UNION ALL
-      SELECT id, 'Publication', title, coalesce(abstract, venue, ''), '/research', venue
+      SELECT id, 'Publication', title, coalesce(abstract, venue, ''), '/publications#' || slug, venue
       FROM "Publication" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', title, abstract, venue, doi)) @@ websearch_to_tsquery('simple', ${normalized})
       UNION ALL
-      SELECT id, 'Event', title, summary, '/events', location
+      SELECT id, 'Event', title, summary, '/events#' || slug, location
       FROM "Event" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', title, summary, location)) @@ websearch_to_tsquery('simple', ${normalized})
       UNION ALL
       SELECT id, 'Achievement', title, description, '/achievements', category
       FROM "Achievement" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', title, description, category, recipient)) @@ websearch_to_tsquery('simple', ${normalized})
       UNION ALL
+      SELECT id, 'Organization', name, description, '/organizations/' || slug, NULL
+      FROM "StudentOrganization" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', name, description)) @@ websearch_to_tsquery('simple', ${normalized})
+      UNION ALL
       SELECT id, 'Page', title, coalesce(excerpt, body), '/' || slug, locale
       FROM "Page" WHERE status = 'PUBLISHED' AND locale = 'en' AND to_tsvector('simple', concat_ws(' ', title, excerpt, body)) @@ websearch_to_tsquery('simple', ${normalized})
       LIMIT 100
     `;
+    return results.map((item) => ({ ...item, title: publicCopy(item.title), description: publicCopy(item.description) }));
   }
   const data = await getSiteData();
   const records: SearchRecord[] = [
-    ...data.pages.map((item) => ({ id: item.id, type: "Page", title: item.title, description: item.excerpt || item.body, href: `/${item.slug}` })),
+    ...data.pages.filter((item) => item.locale === "en").map((item) => ({ id: item.id, type: "Page", title: item.title, description: item.excerpt || item.body, href: `/${item.slug}` })),
     ...data.departments.map((item) => ({ id: item.id, type: "Department", title: item.name, description: item.overview, href: `/departments/${item.slug}`, meta: item.shortName })),
     ...data.programs.map((item) => ({ id: item.id, type: "Programme", title: item.title, description: item.summary, href: `/programs/${item.slug}`, meta: item.departmentName })),
     ...data.faculty.map((item) => ({ id: item.id, type: "Faculty", title: item.name, description: `${item.designation}. ${item.profile || ""}`, href: `/faculty/${item.slug}`, meta: item.departmentName })),
     ...data.laboratories.map((item) => ({ id: item.id, type: "Laboratory", title: item.name, description: item.description, href: `/laboratories/${item.slug}`, meta: item.departmentName })),
-    ...data.researchAreas.map((item) => ({ id: item.id, type: "Research area", title: item.name, description: item.description, href: `/research#${item.slug}`, meta: item.sourceNote })),
-    ...data.projects.map((item) => ({ id: item.id, type: "Project", title: item.title, description: item.summary, href: "/research" })),
-    ...data.publications.map((item) => ({ id: item.id, type: "Publication", title: item.title, description: item.abstract || "Approved publication record", href: "/research" })),
-    ...data.events.map((item) => ({ id: item.id, type: "Event", title: item.title, description: item.summary, href: "/events" })),
+    ...data.researchAreas.map((item) => ({ id: item.id, type: "Research area", title: item.name, description: item.description, href: `/research#${item.slug}` })),
+    ...data.projects.map((item) => ({ id: item.id, type: "Project", title: item.title, description: item.summary, href: `/projects#${item.slug}` })),
+    ...data.publications.map((item) => ({ id: item.id, type: "Publication", title: item.title, description: item.abstract || item.venue || "Publication", href: `/publications#${item.slug}` })),
+    ...data.events.map((item) => ({ id: item.id, type: "Event", title: item.title, description: item.summary, href: `/events#${item.slug}` })),
+    ...data.organizations.map((item) => ({ id: item.id, type: "Organization", title: item.name, description: item.description, href: `/organizations/${item.slug}` })),
     ...data.achievements.map((item) => ({ id: item.id, type: "Achievement", title: item.title, description: item.description, href: "/achievements" })),
   ];
   return records.filter((item) => `${item.title} ${item.description} ${item.meta || ""} ${item.type}`.toLowerCase().includes(normalized.toLowerCase())).slice(0, 100);
