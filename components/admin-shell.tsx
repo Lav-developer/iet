@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Activity, Archive, BookOpen, Building2, FileText, FlaskConical, Gauge, GraduationCap, Link2, LogOut, Search, Settings, ShieldCheck, Trophy, Users, CalendarDays, Microscope } from "lucide-react";
+import { Activity, Archive, BookOpen, Building2, CalendarDays, FileText, FlaskConical, Gauge, GraduationCap, Link2, LogOut, Microscope, Newspaper, Search, Settings, ShieldCheck, Trophy, Users } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { SessionUser } from "@/lib/auth";
 
 const contentLinks = [
+  ["notices", "Notices", Newspaper],
   ["departments", "Departments", Building2], ["programs", "Programs", GraduationCap], ["faculty", "Faculty & staff", Users], ["laboratories", "Laboratories", FlaskConical], ["researchAreas", "Research areas", Microscope], ["projects", "Projects", Activity], ["publications", "Publications", BookOpen], ["achievements", "Achievements", Trophy], ["events", "Events", CalendarDays], ["organizations", "Organizations", Users], ["pages", "Pages", FileText], ["links", "Links", Link2], ["contacts", "Contacts", ShieldCheck], ["media", "Media library", FileText], ["documents", "Documents", FileText], ["settings", "Site settings", Settings],
 ] as const;
 

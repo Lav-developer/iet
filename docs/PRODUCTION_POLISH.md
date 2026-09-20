@@ -179,3 +179,78 @@ prisma/schema.prisma
 tests/public-polish.test.ts
 tests/public-ui-guards.test.ts
 ```
+
+## Follow-up on the same branch: notices, department channels, link styling, password minimum
+
+This follow-up keeps every change above and adds the following. It was
+implemented and verified against the file-backed development store only: no
+production database, environment variable, storage object or account was
+touched, and no migration was applied outside the local engine check below.
+
+### 1. Link styling (no more automatic underlines)
+
+`app/globals.css` no longer lets browser-default underlines appear on UI chrome.
+A single scoped rule removes the underline for navigation, breadcrumbs, footer
+links, cards (`data-card`, `route-card`, `dept-card`, `profile-card`), chips
+(`tag`), CTAs (`link-arrow`, `button`), contact lines, notice headings and
+department channel links, and each group keeps an explicit hover **and**
+`focus-visible` treatment (underline or border/colour change). The blanket
+`a { … }` rule is untouched, so inline links inside long-form copy still carry
+the default underline, and the global `:focus-visible` outline is unchanged.
+
+### 2. Department official channels
+
+- `prisma/migrations/0006_notices_and_department_social_links/migration.sql`
+  adds `DepartmentSocialLink` (`platform`, `url`, `label`, `order`, cascade with
+  its department). Structured URLs only — no raw HTML, no binary content.
+- Platforms: Instagram, Facebook, LinkedIn, X/Twitter, YouTube, Official
+  website, Other official link. `WEBSITE`/`OTHER` also accept `http`; the social
+  platforms require `https`; credentials, control characters and malformed URLs
+  are rejected in `lib/content-policy.ts` (`validateSocialLinks`).
+- Editing happens inside the existing department dialog in the admin content
+  studio (`SocialLinksEditor`), so the existing RBAC and audit logging apply.
+  Administrators can add, edit and remove links; the submitted list replaces the
+  stored list atomically.
+- Public department profiles render an "Official channels" section **only**
+  when links are configured; seeded departments have none, and no URL is
+  invented. Every link opens in a new tab with `rel="noopener noreferrer"` and
+  an accessible label.
+
+### 3. Notice board
+
+- `Notice` supports both notice types: `TEXT` (body) and `PDF` (a reference to
+  the existing `Document`/object-storage pipeline — PDF bytes are never stored
+  in PostgreSQL). Fields: title, slug, summary, body, noticeType, documentId,
+  noticeDate, expiryDate, category, department, status and editorial metadata.
+- Public routes: `/notices` (published notices, newest first, paginated at 10,
+  empty state) and `/notices/[slug]`. PDF notices are clearly marked and offer
+  View/Download PDF; text notices render as readable pages. A PDF notice is
+  only public while its linked document is published. Expired notices leave the
+  listings but remain reachable with an expiry note. Invalid or unpublished
+  slugs return 404.
+- The homepage shows the three latest notices in a modest "Latest notices"
+  section linking to the full board; "Notices" was added to the primary and
+  mobile navigation and the footer, sitemap and site search.
+- Admin: a Notices entity in the existing content studio with the same
+  DRAFT → REVIEW → PUBLISHED → ARCHIVED workflow, PDF upload/replace/remove via
+  the existing upload endpoint (MIME + magic-byte validation), text-only
+  notices, notice/expiry dates, optional category and department scoping.
+
+### 4. Password minimum 12 → 8
+
+`lib/password-policy.ts` is the single source of truth
+(`MIN_PASSWORD_LENGTH = 8`, `MAX_PASSWORD_LENGTH = 200`), used by the
+administrator API schema, the administrator creation form, demo-auth config,
+`scripts/bootstrap-admin.ts` and `prisma/seed.ts`. Only the minimum length
+changed: bcrypt hashing, session versioning, login rate limiting/brute-force
+delays, generic login errors and forced rotation are unchanged.
+
+### 5. Verification
+
+`npm run lint`, `npm test` (131 tests) and `npm run build` pass. New tests cover
+link-styling policy, department social-link validation/projection/rendering,
+notice publishing, filtering, PDF/document visibility, 404 and RBAC behaviour,
+and the 7- vs 8-character password boundary. `node tests/migrations.check.mjs`
+(optional PGlite dependency) applies migrations 0001–0006 in order against a
+local Postgres-compatible engine and asserts the resulting structure, cascade
+and `SET NULL` behaviour without touching any real database.

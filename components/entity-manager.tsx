@@ -4,9 +4,9 @@ import { Plus, Save, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { EntityName } from "@/lib/types";
 
-const configs: Record<EntityName, { title: string; description: string; titleField: string; fields: { key: string; label: string; type?: "textarea" | "select" | "number" | "asset"; options?: string[]; full?: boolean; hint?: string }[] }> = {
+const configs: Record<EntityName, { title: string; description: string; titleField: string; fields: { key: string; label: string; type?: "textarea" | "select" | "number" | "asset" | "date"; options?: string[]; full?: boolean; hint?: string }[] }> = {
   departments: { title: "Departments", description: "Academic units and their connected content.", titleField: "name", fields: [
-    { key: "name", label: "Department name" }, { key: "shortName", label: "Short name" }, { key: "slug", label: "URL slug", hint: "Use lowercase words separated by hyphens." }, { key: "established", label: "Established / source marker" }, { key: "overview", label: "Overview", type: "textarea", full: true }, { key: "sourceNote", label: "Source note", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "select", options: ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"] },
+    { key: "name", label: "Department name" }, { key: "shortName", label: "Short name" }, { key: "slug", label: "URL slug", hint: "Use lowercase words separated by hyphens." }, { key: "established", label: "Established" }, { key: "overview", label: "Overview", type: "textarea", full: true }, { key: "sourceNote", label: "Source note", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "select", options: ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"] },
   ] },
   programs: { title: "Programs", description: "Programmes with level, duration, seat matrix and department relationships.", titleField: "title", fields: [
     { key: "title", label: "Programme title" }, { key: "shortTitle", label: "Short title" }, { key: "slug", label: "URL slug" }, { key: "level", label: "Level" }, { key: "duration", label: "Duration" }, { key: "approvedSeats", label: "Approved seats", type: "number" }, { key: "departmentSlug", label: "Department slug", hint: "Use the related department URL slug." }, { key: "laboratorySlugs", label: "Laboratory slugs", hint: "Comma-separated laboratory slugs." }, { key: "summary", label: "Summary", type: "textarea", full: true }, { key: "eligibility", label: "Eligibility (only if verified)", type: "textarea", full: true }, { key: "admissionNote", label: "Admissions hand-off note", type: "textarea", full: true }, { key: "sourceNote", label: "Source note", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "select", options: ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"] },
@@ -31,6 +31,9 @@ const configs: Record<EntityName, { title: string; description: string; titleFie
   ] },
   events: { title: "Events", description: "IET-specific workshops, seminars, conferences and activities.", titleField: "title", fields: [
     { key: "title", label: "Event title" }, { key: "slug", label: "URL slug" }, { key: "startsAt", label: "Starts at", hint: "ISO date/time is accepted." }, { key: "endsAt", label: "Ends at" }, { key: "location", label: "Location" }, { key: "departmentSlug", label: "Department slug" }, { key: "organizationId", label: "Student organization", type: "asset" }, { key: "registrationUrl", label: "Registration URL" }, { key: "summary", label: "Summary", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "select", options: ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"] },
+  ] },
+  notices: { title: "Notices", description: "Institutional notice board: text notices and PDF notices with an editorial workflow.", titleField: "title", fields: [
+    { key: "title", label: "Notice title" }, { key: "slug", label: "URL slug" }, { key: "noticeType", label: "Notice type", type: "select", options: ["TEXT", "PDF"], hint: "TEXT notices are read on the site. PDF notices link to an uploaded PDF." }, { key: "documentId", label: "PDF document", type: "asset", full: true, hint: "Required for a PDF notice. Upload a PDF or choose an existing published document." }, { key: "noticeDate", label: "Notice date", type: "date" }, { key: "expiryDate", label: "Expiry date (optional)", type: "date", hint: "Leave blank for no expiry. An expired notice stops appearing in public listings." }, { key: "category", label: "Category (optional)", hint: "For example: Examination, Admission, Event." }, { key: "departmentSlug", label: "Department slug (optional)", hint: "Leave blank for an institute-wide notice. Required for department administrators." }, { key: "summary", label: "Summary (optional)", type: "textarea", full: true }, { key: "body", label: "Notice body (text notices)", type: "textarea", full: true, hint: "Required for TEXT notices. Plain text; line breaks are preserved." }, { key: "status", label: "Workflow status", type: "select", options: ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"] },
   ] },
   organizations: { title: "Student organizations", description: "Clubs, chapters and student groups.", titleField: "name", fields: [
     { key: "name", label: "Organization name" }, { key: "slug", label: "URL slug" }, { key: "departmentSlug", label: "Department slug" }, { key: "contactUrl", label: "Official contact URL" }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "select", options: ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"] },
@@ -76,7 +79,7 @@ export function EntityManager({ entity }: { entity: EntityName }) {
   const remove = async (id: string) => { if (!window.confirm("Delete this record? This action is audit logged.")) return; const response = await fetch(`/api/admin/content?entity=${entity}&id=${encodeURIComponent(id)}`, { method: "DELETE" }); const body = await response.json().catch(() => ({})); if (!response.ok) { setError(body.error || "Could not delete record"); return; } setMessage("Record deleted."); load(); };
   const titleFor = (record: any) => record[config.titleField] || record.name || record.title || record.key || record.id;
   const preview = (record: any) => record.overview || record.summary || record.description || record.body || record.value || "";
-  return <><div className="entity-toolbar"><div><div className="admin-breadcrumb">Content / {config.title}</div><h2>{config.title}</h2><p className="small">{config.description}</p></div><button className="button small-button" onClick={startNew}><Plus size={15} /> New record</button></div>{(entity === "media" || entity === "documents") && <UploadPanel entity={entity} onDone={() => { setMessage("Upload stored and metadata record created."); load(); }} />}{error && <div className="alert">{error}</div>}{message && <div className="success">{message}</div>}{loading ? <div className="admin-panel"><p className="small">Loading records…</p></div> : <><div className="admin-panel" style={{ padding: 0, overflowX: "auto" }}><table className="entity-table"><thead><tr><th>Record</th><th>Summary</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead><tbody>{records.map((record) => <tr key={record.id}><td><strong>{titleFor(record)}</strong><br /><span className="small">{record.slug || record.key || record.id}</span></td><td><span className="small">{String(preview(record)).slice(0, 150)}{String(preview(record)).length > 150 ? "…" : ""}</span></td><td>{record.status ? <span className={`status-pill ${String(record.status).toLowerCase()}`}>{record.status}</span> : <span className="tag">setting</span>}</td><td><span className="small">{record.updatedAt ? new Date(record.updatedAt).toLocaleDateString("en-IN") : "seed"}</span></td><td><div className="entity-actions"><button className="mini-button" onClick={() => setEditing(normalizeForForm(record, config.fields))}>Edit</button><button className="mini-button danger" onClick={() => remove(record.id)}><Trash2 size={13} /></button></div></td></tr>)}{records.length === 0 && <tr><td colSpan={5}><div className="empty-state">No records found.</div></td></tr>}</tbody></table></div><div className="cta-row" style={{ marginTop: 10, justifyContent: "space-between" }}><span className="small">{total} record{total === 1 ? "" : "s"} · page {page} of {totalPages}</span><div style={{ display: "flex", gap: 8 }}><button className="button small-button secondary" disabled={page <= 1} onClick={() => load(page - 1)}>Previous</button><button className="button small-button secondary" disabled={page >= totalPages} onClick={() => load(page + 1)}>Next</button></div></div></>}{editing && <EditorModal config={config} value={editing} saving={saving} error={error} onClose={() => setEditing(null)} onSave={save} />}</>;
+  return <><div className="entity-toolbar"><div><div className="admin-breadcrumb">Content / {config.title}</div><h2>{config.title}</h2><p className="small">{config.description}</p></div><button className="button small-button" onClick={startNew}><Plus size={15} /> New record</button></div>{(entity === "media" || entity === "documents") && <UploadPanel entity={entity} onDone={() => { setMessage("Upload stored and metadata record created."); load(); }} />}{error && <div className="alert">{error}</div>}{message && <div className="success">{message}</div>}{loading ? <div className="admin-panel"><p className="small">Loading records…</p></div> : <><div className="admin-panel" style={{ padding: 0, overflowX: "auto" }}><table className="entity-table"><thead><tr><th>Record</th><th>Summary</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead><tbody>{records.map((record) => <tr key={record.id}><td><strong>{titleFor(record)}</strong><br /><span className="small">{record.slug || record.key || record.id}</span></td><td><span className="small">{String(preview(record)).slice(0, 150)}{String(preview(record)).length > 150 ? "…" : ""}</span></td><td>{record.status ? <span className={`status-pill ${String(record.status).toLowerCase()}`}>{record.status}</span> : <span className="tag">setting</span>}</td><td><span className="small">{record.updatedAt ? new Date(record.updatedAt).toLocaleDateString("en-IN") : "seed"}</span></td><td><div className="entity-actions"><button className="mini-button" onClick={() => setEditing(normalizeForForm(record, config.fields))}>Edit</button><button className="mini-button danger" onClick={() => remove(record.id)}><Trash2 size={13} /></button></div></td></tr>)}{records.length === 0 && <tr><td colSpan={5}><div className="empty-state">No records found.</div></td></tr>}</tbody></table></div><div className="cta-row" style={{ marginTop: 10, justifyContent: "space-between" }}><span className="small">{total} record{total === 1 ? "" : "s"} · page {page} of {totalPages}</span><div style={{ display: "flex", gap: 8 }}><button className="button small-button secondary" disabled={page <= 1} onClick={() => load(page - 1)}>Previous</button><button className="button small-button secondary" disabled={page >= totalPages} onClick={() => load(page + 1)}>Next</button></div></div></>}{editing && <EditorModal entity={entity} config={config} value={editing} saving={saving} error={error} onClose={() => setEditing(null)} onSave={save} />}</>;
 }
 
 function UploadPanel({ entity, onDone }: { entity: "media" | "documents"; onDone: () => void }) {
@@ -85,9 +88,19 @@ function UploadPanel({ entity, onDone }: { entity: "media" | "documents"; onDone
   return <div className="admin-panel" style={{ marginBottom: 15, background: "var(--paper-2)" }}><div className="admin-panel-head"><h3>Upload {entity === "media" ? "image / media" : "PDF / document"}</h3><span className="small">Demo stores locally; production uses object storage.</span></div><div className="form-grid"><div className="form-field"><label htmlFor="upload-file">File</label><input id="upload-file" className="form-control" type="file" accept={entity === "media" ? "image/png,image/jpeg,image/webp,image/gif" : "application/pdf"} onChange={(event) => setFile(event.target.files?.[0] || null)} /></div><div className="form-field"><label htmlFor="upload-title">Title</label><input id="upload-title" className="form-control" value={title} onChange={(event) => setTitle(event.target.value)} /></div><div className="form-field"><label htmlFor="upload-alt">Alt text / accessible title</label><input id="upload-alt" className="form-control" value={altText} onChange={(event) => setAltText(event.target.value)} /></div><div className="form-field"><label htmlFor="upload-caption">Caption</label><input id="upload-caption" className="form-control" value={caption} onChange={(event) => setCaption(event.target.value)} /></div>{entity === "documents" && <div className="form-field"><label htmlFor="upload-status">Workflow status</label><select id="upload-status" className="form-select" value={status} onChange={(event) => setStatus(event.target.value)}><option>DRAFT</option><option>REVIEW</option><option>PUBLISHED</option></select></div>}</div>{error && <div className="alert">{error}</div>}<button className="button small-button" style={{ marginTop: 14 }} onClick={upload} disabled={busy}>{busy ? "Uploading…" : "Upload and create metadata"}</button></div>;
 }
 
-function normalizeForForm(record: any, fields: { key: string }[]) { const clone = { ...record }; fields.forEach((field) => { if (["researchInterests", "researchAreaSlugs", "laboratorySlugs", "facultySlugs", "departmentSlugs", "authorSlugs"].includes(field.key) && Array.isArray(clone[field.key])) clone[field.key] = clone[field.key].join(", "); }); return clone; }
+function normalizeForForm(record: any, fields: { key: string; type?: string }[]) {
+  const clone = { ...record };
+  fields.forEach((field) => {
+    if (["researchInterests", "researchAreaSlugs", "laboratorySlugs", "facultySlugs", "departmentSlugs", "authorSlugs"].includes(field.key) && Array.isArray(clone[field.key])) clone[field.key] = clone[field.key].join(", ");
+    // <input type="date"> only accepts YYYY-MM-DD; stored values are timestamps.
+    if (field.type === "date" && clone[field.key]) clone[field.key] = String(clone[field.key]).slice(0, 10);
+  });
+  if (Array.isArray(clone.socialLinks)) clone.socialLinks = clone.socialLinks.map((link: any) => ({ platform: link.platform, url: link.url, label: link.label || "", order: link.order }));
+  return clone;
+}
 
-function EditorModal({ config, value, saving, error, onClose, onSave }: {
+function EditorModal({ entity, config, value, saving, error, onClose, onSave }: {
+  entity: EntityName;
   config: (typeof configs)[EntityName]; value: Record<string, any>; saving: boolean; error: string;
   onClose: () => void; onSave: (value: Record<string, any>) => void;
 }) {
@@ -119,16 +132,44 @@ function EditorModal({ config, value, saving, error, onClose, onSave }: {
       {field.type === "asset" ? <AssetPicker fieldKey={field.key} value={form[field.key] || ""} departmentSlug={form.departmentSlug} onChange={(value) => set(field.key, value)} onBusyChange={(busy) => setUploads((current) => ({ ...current, [field.key]: busy }))} />
         : field.type === "textarea" ? <textarea id={`field-${field.key}`} className="form-textarea" value={form[field.key] ?? ""} onChange={(event) => set(field.key, event.target.value)} />
         : field.type === "select" ? <select id={`field-${field.key}`} className="form-select" value={form[field.key] ?? field.options?.[0] ?? ""} onChange={(event) => set(field.key, event.target.value)}>{field.options?.map((option) => <option key={option}>{option}</option>)}</select>
-        : <input id={`field-${field.key}`} className="form-control" type={field.type === "number" ? "number" : field.key === "cvUrl" ? "url" : "text"} value={form[field.key] ?? ""} onChange={(event) => set(field.key, event.target.value)} />}
+        : <input id={`field-${field.key}`} className="form-control" type={field.type === "number" ? "number" : field.type === "date" ? "date" : field.key === "cvUrl" ? "url" : "text"} value={form[field.key] ?? ""} onChange={(event) => set(field.key, event.target.value)} />}
       {field.hint && <div className="form-hint">{field.hint}</div>}
     </div>)}</div>
+    {entity === "departments" && <SocialLinksEditor value={form.socialLinks} onChange={(links) => set("socialLinks", links)} />}
     <div className="form-actions"><button className="button secondary small-button" disabled={uploading || saving} onClick={onClose}>Cancel</button><button className="button small-button" disabled={saving || uploading} onClick={() => onSave(form)}><Save size={14} /> {saving ? "Saving…" : uploading ? "Uploading…" : "Save record"}</button></div>
   </div>;
 }
 
 
+const socialPlatformOptions = [["INSTAGRAM", "Instagram"], ["FACEBOOK", "Facebook"], ["LINKEDIN", "LinkedIn"], ["X", "X (Twitter)"], ["YOUTUBE", "YouTube"], ["WEBSITE", "Official website"], ["OTHER", "Other official link"]] as const;
+
+/**
+ * Department-owned official channels, edited as part of the department record.
+ * Values are structured (platform + URL + optional label); no HTML is stored
+ * and the server validates every URL before saving.
+ */
+function SocialLinksEditor({ value, onChange }: { value: any; onChange: (links: any[]) => void }) {
+  const links: any[] = Array.isArray(value) ? value : [];
+  const update = (index: number, patch: Record<string, string>) => onChange(links.map((link, position) => (position === index ? { ...link, ...patch } : link)));
+  const add = () => onChange([...links, { platform: "INSTAGRAM", url: "", label: "", order: links.length }]);
+  const remove = (index: number) => onChange(links.filter((_, position) => position !== index).map((link, position) => ({ ...link, order: position })));
+  return <div className="form-field full">
+    <span className="form-label">Official social &amp; external links</span>
+    <div className="form-hint">Only add accounts owned by this department. Links appear in a public “Official channels” section when the department is published.</div>
+    {links.map((link, index) => <div className="social-link-row" key={index}>
+      <select className="form-select" aria-label={`Platform for link ${index + 1}`} value={link.platform || "INSTAGRAM"} onChange={(event) => update(index, { platform: event.target.value })}>
+        {socialPlatformOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+      </select>
+      <input className="form-control" aria-label={`URL for link ${index + 1}`} placeholder="https://…" value={link.url ?? ""} onChange={(event) => update(index, { url: event.target.value })} />
+      {link.platform === "OTHER" && <input className="form-control" aria-label={`Label for link ${index + 1}`} placeholder="Channel name" value={link.label ?? ""} onChange={(event) => update(index, { label: event.target.value })} />}
+      <button type="button" className="mini-button danger" onClick={() => remove(index)}><Trash2 size={13} /> Remove</button>
+    </div>)}
+    <button type="button" className="button secondary small-button" style={{ marginTop: links.length ? 10 : 0 }} onClick={add}><Plus size={14} /> Add official link</button>
+  </div>;
+}
+
 function AssetPicker({ fieldKey, value, departmentSlug, onChange, onBusyChange }: { fieldKey: string; value: string; departmentSlug?: string; onChange: (id: string) => void; onBusyChange: (busy: boolean) => void }) {
-  const collection = fieldKey === "profileImageId" ? "media" : fieldKey === "cvDocumentId" ? "documents" : "organizations";
+  const collection = fieldKey === "profileImageId" ? "media" : fieldKey === "cvDocumentId" || fieldKey === "documentId" ? "documents" : "organizations";
   const [records, setRecords] = useState<Record<string, any>[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowUpRight, FlaskConical, GraduationCap, Users, Accessibility, Compass } from "lucide-react";
 import { CountLabel, SectionHeading } from "@/components/ui";
+import { currentNotices, formatNoticeDate } from "@/lib/notices";
 import { getSiteData } from "@/lib/store";
 
 export const metadata = {
@@ -12,6 +13,7 @@ export default async function HomePage() {
   const data = await getSiteData();
   const cse = data.departments.find((item) => item.slug === "computer-science-engineering");
   const featuredAreas = data.researchAreas.slice(0, 4);
+  const latestNotices = currentNotices(data.notices).slice(0, 3);
   return (
     <>
       <section className="home-hero">
@@ -75,6 +77,21 @@ export default async function HomePage() {
           </div>
         </div>
       </section>
+
+      {latestNotices.length > 0 && <section className="section tight">
+        <div className="container">
+          <SectionHeading eyebrow="Notice board" title="Latest notices" description="Official notices published by IET-DSMNRU." href="/notices" linkLabel="View all notices" />
+          <div className="home-notices">
+            <ul className="home-notice-list">
+              {latestNotices.map((notice) => <li key={notice.id}>
+                <Link href={`/notices/${notice.slug}`}>{notice.title}</Link>
+                <time dateTime={new Date(notice.noticeDate).toISOString()}>{formatNoticeDate(notice.noticeDate)}</time>
+              </li>)}
+            </ul>
+            <Link className="button secondary" href="/notices">View notice board</Link>
+          </div>
+        </div>
+      </section>}
 
       <section className="section tight soft">
         <div className="container" style={{ display: "flex", justifyContent: "space-between", gap: 30, alignItems: "center", flexWrap: "wrap" }}>

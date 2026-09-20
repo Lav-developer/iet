@@ -1,3 +1,4 @@
+import { passwordSchema } from "@/lib/password-policy";
 import bcrypt from "bcryptjs";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -6,8 +7,8 @@ import { getPrisma } from "@/lib/db";
 import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
 
 const roleSchema = z.enum(["SUPER_ADMIN", "IET_ADMIN", "DEPARTMENT_ADMIN", "EDITOR"]);
-const createSchema = z.object({ email: z.string().email().max(254), name: z.string().trim().min(2).max(120), password: z.string().min(12).max(200), role: roleSchema, departmentId: z.string().trim().min(1).optional() });
-const updateSchema = z.object({ name: z.string().trim().min(2).max(120).optional(), password: z.string().min(12).max(200).optional(), role: roleSchema.optional(), departmentId: z.string().trim().min(1).nullable().optional(), active: z.boolean().optional() });
+const createSchema = z.object({ email: z.string().email().max(254), name: z.string().trim().min(2).max(120), password: passwordSchema, role: roleSchema, departmentId: z.string().trim().min(1).optional() });
+const updateSchema = z.object({ name: z.string().trim().min(2).max(120).optional(), password: passwordSchema.optional(), role: roleSchema.optional(), departmentId: z.string().trim().min(1).nullable().optional(), active: z.boolean().optional() });
 
 function ipAddress(request: Request) {
   // Derived from the trusted proxy chain (see lib/security.ts), never from

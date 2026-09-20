@@ -40,11 +40,19 @@ async function layout(page, label) {
       const card = el.getBoundingClientRect(), parent = el.parentElement.getBoundingClientRect();
       return el.scrollWidth > el.clientWidth + 1 || card.left < parent.left - 1 || card.right > parent.right + 1;
     }).map(el => el.className);
-    return { width: document.documentElement.scrollWidth, splitWords, overflow };
+    // UI chrome must not render browser underlines; focus rings are CSS-only and
+    // are asserted separately by the accessibility checks below.
+    const underlined = [...document.querySelectorAll(
+      '.main-nav a, .mobile-nav a, .breadcrumbs a, .site-footer a, a.data-card, a.route-card, a.dept-card, a.profile-card, a.tag, .contact-line a, .notice-card h3 a, .department-social a, .data-card a, .aside-card a, .aside-item a, .info-aside a, .ecosystem-panel a, .home-notice-list a',
+    )].filter(el => el.getClientRects().length && getComputedStyle(el).textDecorationLine.includes('underline')).map(el => `${el.className || el.tagName}:${el.textContent.slice(0, 30)}`);
+    const focusOutline = getComputedStyle(document.documentElement).getPropertyValue('--lime').trim();
+    return { width: document.documentElement.scrollWidth, splitWords, overflow, underlined, focusOutline };
   });
   assert.ok(result.width <= page.viewportSize().width, `${label}: page overflow`);
   assert.deepEqual(result.splitWords, [], `${label}: mid-word heading/name splits`);
   assert.deepEqual(result.overflow, [], `${label}: overflowing cards`);
+  assert.deepEqual(result.underlined, [], `${label}: UI links render an underline`);
+  assert.notEqual(result.focusOutline, '', `${label}: accessibility focus tokens are present`);
 }
 
 // A published profile must keep its information hierarchy: no CMS language,
@@ -79,7 +87,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
-    for (const route of ['/departments', '/faculty', '/faculty/archana-awasthi']) {
+    for (const route of ['/departments', '/notices', '/about', '/contact', '/faculty', '/faculty/archana-awasthi']) {
       const response = await page.goto(base + route, { waitUntil: 'networkidle' });
       assert.equal(response.status(), 200, route);
       for (const enlarged of [false, true]) {
@@ -87,6 +95,15 @@ try {
         await layout(page, label);
         const trigger = page.getByRole('button', { name: 'Open accessibility preferences', exact: true });
         await withinViewport(trigger, `${label} trigger`);
+        if (route === '/notices') {
+          const board = await page.evaluate(() => ({
+            cards: document.querySelectorAll('.notice-card').length,
+            empty: Boolean(document.querySelector('.empty-state')),
+            heading: document.querySelector('.page-hero h1')?.textContent || '',
+          }));
+          assert.equal(board.heading, 'Notices', `${label}: notice board heading`);
+          assert.ok(board.cards > 0 || board.empty, `${label}: notice board shows notices or an empty state`);
+        }
         if (route === '/departments') {
           const headings = await page.locator('.dept-card h2').evaluateAll(elements => elements.map(el => parseFloat(getComputedStyle(el).fontSize)));
           assert.ok(headings.every(size => size <= (enlarged ? 28 : 23)), `${label}: card typography is not section-sized`);
@@ -138,6 +155,46 @@ try {
         await withinViewport(page.getByRole('navigation', { name: 'Primary navigation', exact: true }), 'desktop navigation');
       }
     }
+    // Department profiles: the channel section is absent unless configured, and
+    // a card CTA still underlines on hover.
+    const departmentResponse = await page.goto(base + '/departments/mechanical-engineering', { waitUntil: 'networkidle' });
+    assert.equal(departmentResponse.status(), 200, 'department profile');
+    await layout(page, `${width}px /departments/mechanical-engineering`);
+    assert.equal(await page.locator('#channels, .department-social').count(), 0, `${width}px: a department without configured channels renders no section`);
+
+    // When a department does have configured channels they must be safe,
+    // accessible external links that stay inside the viewport.
+    await page.goto(base + '/departments/civil-engineering', { waitUntil: 'networkidle' });
+    await layout(page, `${width}px /departments/civil-engineering`);
+    const channels = page.locator('.department-social a');
+    const channelCount = await channels.count();
+    if (channelCount > 0) {
+      for (let index = 0; index < channelCount; index++) {
+        const link = channels.nth(index);
+        await link.scrollIntoViewIfNeeded();
+        await withinViewport(link, `${width}px department channel ${index}`);
+        const attributes = await link.evaluate((element) => ({ href: element.getAttribute('href'), target: element.getAttribute('target'), rel: element.getAttribute('rel'), label: element.getAttribute('aria-label') }));
+        assert.match(attributes.href, /^https?:\/\//, `${width}px: channel URL is absolute`);
+        assert.equal(attributes.target, '_blank', `${width}px: channel opens in a new tab`);
+        assert.match(attributes.rel, /noopener/, `${width}px: channel rel is safe`);
+        assert.ok(attributes.label && attributes.label.length > 5, `${width}px: channel has an accessible label`);
+      }
+      assert.equal(await page.locator('#channels').count(), 1, `${width}px: channel section renders once`);
+      await page.evaluate(() => window.scrollTo(0, 0));
+    }
+    const card = page.locator('a.data-card').first();
+    if (await card.count()) {
+      const before = await card.evaluate(el => getComputedStyle(el).borderColor);
+      await card.hover();
+      await page.waitForTimeout(120);
+      const after = await card.evaluate(el => ({ border: getComputedStyle(el).borderColor, cta: getComputedStyle(el.querySelector('.link-arrow') || el).textDecorationLine }));
+      assert.notEqual(after.border, before, `${width}px: card hover cue is visible`);
+    }
+    // Keyboard focus stays visible on de-underlined links.
+    await page.keyboard.press('Tab');
+    const focusedOutline = await page.evaluate(() => { const el = document.activeElement; return el ? getComputedStyle(el).outlineStyle : 'none'; });
+    assert.notEqual(focusedOutline, 'none', `${width}px: keyboard focus outline is preserved`);
+
     // Other profile shapes: leadership with interests and no department, and laboratory staff.
     for (const [route, expected] of [['/faculty/chandra-kumar-dixit', 'Research interests'], ['/faculty/aman-kumar-yadav', 'Role type']]) {
       const response = await page.goto(base + route, { waitUntil: 'networkidle' });

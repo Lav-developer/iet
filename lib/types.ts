@@ -1,5 +1,17 @@
 export type ContentStatus = "DRAFT" | "REVIEW" | "PUBLISHED" | "ARCHIVED";
 
+export const socialPlatforms = ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "X", "YOUTUBE", "WEBSITE", "OTHER"] as const;
+export type SocialPlatform = (typeof socialPlatforms)[number];
+
+/** Structured department-owned channel: a validated URL, never raw HTML. */
+export type DepartmentSocialLink = {
+  id?: string;
+  platform: SocialPlatform | string;
+  url: string;
+  label?: string | null;
+  order?: number;
+};
+
 export type Department = {
   id: string;
   slug: string;
@@ -8,6 +20,7 @@ export type Department = {
   overview: string;
   established?: string;
   sourceNote?: string;
+  socialLinks?: DepartmentSocialLink[];
   status: ContentStatus;
 };
 
@@ -143,6 +156,29 @@ export type StudentOrganization = {
   status: ContentStatus;
 };
 
+export const noticeTypes = ["TEXT", "PDF"] as const;
+export type NoticeType = (typeof noticeTypes)[number];
+
+export type Notice = {
+  id: string;
+  slug: string;
+  title: string;
+  summary?: string;
+  /** Text notices render this body; PDF notices may omit it. */
+  body?: string;
+  noticeType: NoticeType | string;
+  documentId?: string | null;
+  /** Resolved only for published PDF documents; never a raw storage path. */
+  pdf?: { url: string; title: string };
+  noticeDate: string | Date;
+  expiryDate?: string | Date | null;
+  category?: string;
+  departmentSlug?: string;
+  departmentName?: string;
+  status: ContentStatus;
+  publishedAt?: string | Date | null;
+};
+
 export type PageRecord = {
   id: string;
   slug: string;
@@ -230,6 +266,7 @@ export type EntityName =
   | "achievements"
   | "events"
   | "organizations"
+  | "notices"
   | "pages"
   | "links"
   | "contacts"
@@ -247,6 +284,7 @@ export type SiteData = {
   publications: Publication[];
   achievements: Achievement[];
   events: EventItem[];
+  notices: Notice[];
   organizations: StudentOrganization[];
   pages: PageRecord[];
   links: LinkRecord[];

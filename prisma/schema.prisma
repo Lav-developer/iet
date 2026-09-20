@@ -64,6 +64,8 @@ model Department {
   events             Event[]
   organizations      StudentOrganization[]
   documents          Document[]
+  notices            Notice[]
+  socialLinks        DepartmentSocialLink[]
   departmentResearch DepartmentResearchArea[]
 
   @@index([status])
@@ -415,6 +417,7 @@ model Document {
   department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   page         Page?         @relation(fields: [pageId], references: [id], onDelete: SetNull)
   facultyCVs   FacultyMember[] @relation("FacultyCV")
+  notices      Notice[]      @relation("NoticeDocument")
 
   @@index([departmentId])
   @@index([pageId])
@@ -492,4 +495,59 @@ model RateLimitBucket {
   updatedAt DateTime @updatedAt
 
   @@index([resetAt])
+}
+
+/**
+ * Department-owned official social/external channels. URLs are stored as
+ * structured values (never raw HTML) and validated before saving. Rows are
+ * removed with their department, and existing departments simply have none.
+ */
+model DepartmentSocialLink {
+  id           String     @id @default(cuid())
+  departmentId String
+  platform     String
+  url          String
+  label        String?
+  order        Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@index([departmentId])
+  @@index([platform])
+}
+
+/**
+ * Institutional notice board. A notice is either a text notice (body) or a PDF
+ * notice that references a Document row — PDF bytes always live in object
+ * storage, never in PostgreSQL. noticeDate drives public ordering and
+ * expiryDate optionally closes public listing visibility.
+ */
+model Notice {
+  id           String        @id @default(cuid())
+  slug         String        @unique
+  title        String
+  summary      String?       @db.Text
+  body         String?       @db.Text
+  noticeType   String        @default("TEXT")
+  documentId   String?
+  document     Document?     @relation("NoticeDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  noticeDate   DateTime      @default(now())
+  expiryDate   DateTime?
+  category     String?
+  departmentId String?
+  department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  status       ContentStatus @default(DRAFT)
+  createdAt    DateTime      @default(now())
+  createdById  String?
+  updatedById  String?
+  updatedAt    DateTime      @updatedAt
+  publishedAt  DateTime?
+
+  @@index([status])
+  @@index([noticeDate])
+  @@index([expiryDate])
+  @@index([noticeType])
+  @@index([departmentId])
+  @@index([documentId])
 }

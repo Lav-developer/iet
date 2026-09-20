@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 import { seedData } from "../data/seed";
+import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, meetsPasswordPolicy } from "../lib/password-policy";
 
 const prisma = new PrismaClient();
 
@@ -10,8 +11,8 @@ async function main() {
   }
   const adminEmail = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
   const adminPassword = process.env.SEED_ADMIN_PASSWORD;
-  if (!adminEmail || !adminPassword || adminPassword.length < 12) {
-    throw new Error("Set SEED_ADMIN_EMAIL and a SEED_ADMIN_PASSWORD of at least 12 characters for local seeding.");
+  if (!adminEmail || !meetsPasswordPolicy(adminPassword)) {
+    throw new Error(`Set SEED_ADMIN_EMAIL and a SEED_ADMIN_PASSWORD with ${MIN_PASSWORD_LENGTH}-${MAX_PASSWORD_LENGTH} characters for local seeding.`);
   }
   const adminHash = await bcrypt.hash(adminPassword, 12);
   await prisma.user.upsert({ where: { email: adminEmail }, update: { name: "IET Administrator", passwordHash: adminHash, role: "IET_ADMIN", active: true }, create: { email: adminEmail, name: "IET Administrator", passwordHash: adminHash, role: "IET_ADMIN" } });

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { UserRole } from "@/lib/auth";
 import type { EntityName } from "@/lib/types";
 
-export const entityValues = ["departments", "programs", "faculty", "laboratories", "researchAreas", "projects", "publications", "achievements", "events", "organizations", "pages", "links", "contacts", "settings", "media", "documents"] as const;
+export const entityValues = ["departments", "programs", "faculty", "laboratories", "researchAreas", "projects", "publications", "achievements", "events", "notices", "organizations", "pages", "links", "contacts", "settings", "media", "documents"] as const;
 export const entitySchema = z.enum(entityValues);
 
 /**
@@ -16,13 +16,13 @@ export function isEntityName(value: string): value is EntityName {
   return (entityValues as readonly string[]).includes(value);
 }
 export const statusValues = new Set(["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"]);
-export const departmentScoped = new Set(["programs", "faculty", "laboratories", "projects", "publications", "achievements", "events", "organizations", "documents"]);
+export const departmentScoped = new Set(["programs", "faculty", "laboratories", "projects", "publications", "achievements", "events", "notices", "organizations", "documents"]);
 
 export type PolicyUser = { role: UserRole; departmentId?: string | null };
 export type RecordSnapshot = Record<string, unknown> | undefined;
 
 const allowedFields: Record<string, Set<string>> = {
-  departments: new Set(["name", "shortName", "slug", "overview", "established", "sourceNote", "status"]),
+  departments: new Set(["name", "shortName", "slug", "overview", "established", "sourceNote", "socialLinks", "status"]),
   programs: new Set(["title", "shortTitle", "slug", "level", "duration", "approvedSeats", "summary", "eligibility", "admissionNote", "sourceNote", "departmentSlug", "laboratorySlugs", "status"]),
   faculty: new Set(["name", "slug", "designation", "profileImageId", "cvUrl", "cvDocumentId", "email", "phone", "qualification", "profile", "researchInterests", "researchAreaSlugs", "laboratorySlugs", "departmentSlug", "type", "status"]),
   laboratories: new Set(["name", "slug", "description", "equipment", "courses", "researchRelevance", "departmentSlug", "status"]),
@@ -32,6 +32,7 @@ const allowedFields: Record<string, Set<string>> = {
   achievements: new Set(["title", "category", "description", "recipient", "year", "eventName", "departmentSlug", "status"]),
   events: new Set(["title", "slug", "summary", "startsAt", "endsAt", "location", "registrationUrl", "organizationId", "departmentSlug", "status"]),
   organizations: new Set(["name", "slug", "description", "contactUrl", "departmentSlug", "status"]),
+  notices: new Set(["title", "slug", "summary", "body", "noticeType", "documentId", "noticeDate", "expiryDate", "category", "departmentSlug", "status"]),
   pages: new Set(["title", "slug", "excerpt", "body", "locale", "status"]),
   links: new Set(["label", "url", "description", "owner", "order", "status"]),
   contacts: new Set(["label", "name", "email", "phone", "address", "category", "status"]),
@@ -41,6 +42,47 @@ const allowedFields: Record<string, Set<string>> = {
 };
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+export const socialPlatformValues = ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "X", "YOUTUBE", "WEBSITE", "OTHER"] as const;
+export type SocialPlatformValue = (typeof socialPlatformValues)[number];
+export const MAX_SOCIAL_LINKS = 8;
+const MAX_SOCIAL_URL_LENGTH = 300;
+const MAX_SOCIAL_LABEL_LENGTH = 80;
+
+/**
+ * Department social links are stored as structured values, never HTML.
+ * Social platforms must be HTTPS (they only publish HTTPS endpoints anyway);
+ * WEBSITE / OTHER additionally accept HTTP for older official sites. Credential
+ * URLs, whitespace and control characters are always rejected.
+ */
+export function validateSocialLinks(value: unknown): { platform: SocialPlatformValue; url: string; label?: string; order: number }[] {
+  if (value === undefined || value === null || value === "") return [];
+  if (!Array.isArray(value)) throw new Error("INVALID_INPUT: Social links must be a list.");
+  if (value.length > MAX_SOCIAL_LINKS) throw new Error(`INVALID_INPUT: A department may have at most ${MAX_SOCIAL_LINKS} social links.`);
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") throw new Error("INVALID_INPUT: Each social link needs a platform and URL.");
+    const raw = entry as Record<string, unknown>;
+    const platform = String(raw.platform || "").trim().toUpperCase();
+    if (!(socialPlatformValues as readonly string[]).includes(platform)) throw new Error(`INVALID_INPUT: Unsupported social platform "${String(raw.platform || "")}".`);
+    // Surrounding whitespace is trimmed before validation; internal whitespace
+    // and control characters are rejected by the URL check below.
+    const url = String(raw.url || "").trim();
+    if (!url || url.length > MAX_SOCIAL_URL_LENGTH) throw new Error("INVALID_INPUT: Each social link needs a URL of at most 300 characters.");
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { throw new Error("INVALID_INPUT: Social links must be absolute URLs."); }
+    const httpsOnly = platform !== "WEBSITE" && platform !== "OTHER";
+    const allowedProtocol = httpsOnly ? parsed.protocol === "https:" : parsed.protocol === "https:" || parsed.protocol === "http:";
+    if (!allowedProtocol || parsed.username || parsed.password || /[\u0000-\u0020\u007f]/.test(url)) {
+      throw new Error(httpsOnly
+        ? "INVALID_INPUT: Social platform links must be secure HTTPS URLs without credentials."
+        : "INVALID_INPUT: Official links must be HTTP or HTTPS URLs without credentials.");
+    }
+    const label = raw.label === undefined || raw.label === null ? undefined : String(raw.label).trim();
+    if (label && label.length > MAX_SOCIAL_LABEL_LENGTH) throw new Error("INVALID_INPUT: A social link label is too long.");
+    if (platform === "OTHER" && !label) throw new Error("INVALID_INPUT: Provide a short label for an 'Other official link'.");
+    return { platform: platform as SocialPlatformValue, url, ...(label ? { label } : {}), order: index };
+  });
+}
 
 const collectionKeyPattern = (collection: "media" | "documents") =>
   new RegExp(`^${collection}/\\d{4}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.[a-z0-9]{1,5}$`);
@@ -110,8 +152,13 @@ export function sanitize(entity: EntityName, raw: Record<string, unknown>) {
   if (data.researchInterests && typeof data.researchInterests === "string") data.researchInterests = data.researchInterests.split(",").map((item) => item.trim()).filter(Boolean);
   for (const key of ["approvedSeats", "year", "order"]) if (data[key] !== undefined && data[key] !== "") data[key] = Number(data[key]);
   const slugSource = data.slug || data.title || data.name || data.key;
-  if (["departments", "programs", "faculty", "laboratories", "researchAreas", "projects", "publications", "events", "organizations", "pages"].includes(entity) && slugSource) data.slug = slugify(String(slugSource));
+  if (["departments", "programs", "faculty", "laboratories", "researchAreas", "projects", "publications", "events", "notices", "organizations", "pages"].includes(entity) && slugSource) data.slug = slugify(String(slugSource));
   if (entity === "settings" && !data.key) throw new Error("Setting key is required.");
+  if (entity === "departments" && data.socialLinks !== undefined) {
+    // Normalizing here (not only in validatePayload) guarantees an unknown key
+    // submitted alongside a platform/URL pair can never reach storage.
+    data.socialLinks = validateSocialLinks(data.socialLinks);
+  }
   if (entity === "media") {
     // A media record may only reference objects in the media storage
     // collection (UUID object names), never arbitrary storage keys — this is
@@ -173,6 +220,23 @@ export function validatePayload(entity: EntityName, data: Record<string, unknown
     }
   }
   if (entity === "pages" && typeof data.body === "string" && data.body.length > 100000) throw new Error("INVALID_INPUT: Page body is too large.");
+  if (entity === "notices") {
+    const noticeType = data.noticeType === undefined ? "TEXT" : String(data.noticeType).toUpperCase();
+    if (!["TEXT", "PDF"].includes(noticeType)) throw new Error("INVALID_INPUT: Notice type must be TEXT or PDF.");
+    const body = typeof data.body === "string" ? data.body.trim() : "";
+    const documentId = data.documentId === undefined || data.documentId === null ? "" : String(data.documentId).trim();
+    if (noticeType === "PDF" && !documentId) throw new Error("INVALID_INPUT: A PDF notice requires an uploaded PDF document.");
+    if (noticeType === "TEXT" && !body) throw new Error("INVALID_INPUT: A text notice requires a notice body.");
+    if (!String(data.title || "").trim()) throw new Error("INVALID_INPUT: A notice title is required.");
+    for (const key of ["noticeDate", "expiryDate"]) {
+      if (data[key] === undefined || data[key] === null || data[key] === "") continue;
+      if (Number.isNaN(new Date(String(data[key])).getTime())) throw new Error(`INVALID_INPUT: ${key} must be a valid date.`);
+    }
+    const noticeDate = data.noticeDate ? new Date(String(data.noticeDate)) : undefined;
+    const expiryDate = data.expiryDate ? new Date(String(data.expiryDate)) : undefined;
+    if (noticeDate && expiryDate && expiryDate.getTime() < noticeDate.getTime()) throw new Error("INVALID_INPUT: The expiry date cannot be before the notice date.");
+  }
+  if (entity === "departments" && data.socialLinks !== undefined) data.socialLinks = validateSocialLinks(data.socialLinks);
 }
 
 export function slugify(input: string) {

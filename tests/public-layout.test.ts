@@ -11,7 +11,8 @@ test("department card styles cover semantic h2 and h3 headings without changing 
   assert.match(card, /font-size:\s*clamp\(/);
   assert.match(card, /line-height:\s*1\.25/);
   assert.match(card, /overflow-wrap:\s*normal/);
-  assert.match(css, /a\.dept-card, a\.profile-card\s*\{\s*text-decoration:\s*none/);
+  // Card anchors are reset through the consolidated UI-link rule.
+  assert.match(css, /a\.data-card, a\.route-card, a\.dept-card, a\.profile-card/);
   assert.match(css, /a\.dept-card:is\(:hover, :focus-visible\) \.link-arrow/);
 });
 

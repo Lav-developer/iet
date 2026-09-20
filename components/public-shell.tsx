@@ -13,6 +13,7 @@ const navItems = [
   { href: "/people", label: "People" },
   { href: "/research", label: "Research" },
   { href: "/campus", label: "Campus" },
+  { href: "/notices", label: "Notices" },
 ];
 
 export function PublicShell({ children }: { children: React.ReactNode }) {
@@ -64,7 +65,7 @@ function SiteFooter() {
           <p>Explore IET programmes, departments, people and research. Visit DSMNRU for university notices, examinations, results and student services.</p>
         </div>
         <div><h3>Explore</h3><ul><li><Link href="/about">About IET</Link></li><li><Link href="/departments">Departments</Link></li><li><Link href="/programs">Programmes</Link></li><li><Link href="/faculty">Faculty directory</Link></li><li><Link href="/laboratories">Laboratories</Link></li><li><Link href="/infrastructure">Infrastructure</Link></li></ul></div>
-        <div><h3>Discover</h3><ul><li><Link href="/research">Research</Link></li><li><Link href="/projects">Projects</Link></li><li><Link href="/publications">Publications</Link></li><li><Link href="/events">Events</Link></li><li><Link href="/organizations">Student organizations</Link></li><li><Link href="/resources">Resources</Link></li><li><Link href="/achievements">Achievements</Link></li><li><Link href="/career">Career &amp; industry</Link></li><li><Link href="/contact">Contact</Link></li></ul></div>
+        <div><h3>Discover</h3><ul><li><Link href="/research">Research</Link></li><li><Link href="/projects">Projects</Link></li><li><Link href="/publications">Publications</Link></li><li><Link href="/events">Events</Link></li><li><Link href="/notices">Notices</Link></li><li><Link href="/organizations">Student organizations</Link></li><li><Link href="/resources">Resources</Link></li><li><Link href="/achievements">Achievements</Link></li><li><Link href="/career">Career &amp; industry</Link></li><li><Link href="/contact">Contact</Link></li></ul></div>
         <div><h3>University services</h3><ul><li><a href="https://dsmru.up.nic.in/" target="_blank" rel="noreferrer">DSMNRU website <ExternalLink size={12} /></a></li><li><a href="https://dsmru.samarth.edu.in/index.php/site/login" target="_blank" rel="noreferrer">Samarth student portal <ExternalLink size={12} /></a></li><li><Link href="/accessibility">Accessibility statement</Link></li><li><Link href="/privacy">Privacy</Link></li></ul></div>
       </div>
       <div className="container footer-bottom"><span>© IET-DSMNRU</span><span>Dr. Shakuntala Misra National Rehabilitation University</span></div>

@@ -801,6 +801,9 @@ export const seedData: SiteData = {
       status: "DRAFT",
     },
   ],
+  // Notices are created by administrators/editors in the CMS; no notice
+  // content is fabricated for the site seed or the file-backed store.
+  notices: [],
   organizations: [
     {
       id: "organization-placeholder",

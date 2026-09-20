@@ -15,12 +15,13 @@
  *   DATABASE_URL="…" \
  *   BOOTSTRAP_ADMIN_EMAIL="admin@iet.example.ac.in" \
  *   BOOTSTRAP_ADMIN_NAME="Platform Administrator" \
- *   BOOTSTRAP_ADMIN_PASSWORD="<operator-generated password, 12+ chars>" \
+ *   BOOTSTRAP_ADMIN_PASSWORD="<operator-generated password, 8+ chars>" \
  *   BOOTSTRAP_I_UNDERSTAND=yes \
  *   npx tsx scripts/bootstrap-admin.ts
  */
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { meetsPasswordPolicy, passwordPolicyMessage } from "../lib/password-policy";
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -42,8 +43,8 @@ async function main() {
   if (!name || name.length < 2 || name.length > 120) {
     throw new Error("BOOTSTRAP_ADMIN_NAME must be provided (2-120 characters).");
   }
-  if (!password || password.length < 12 || password.length > 200) {
-    throw new Error("BOOTSTRAP_ADMIN_PASSWORD must be provided (12-200 characters). Never use a default or shared password.");
+  if (!meetsPasswordPolicy(password)) {
+    throw new Error(`${passwordPolicyMessage("BOOTSTRAP_ADMIN_PASSWORD")} Never use a default or shared password.`);
   }
 
   const prisma = new PrismaClient();

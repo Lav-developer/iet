@@ -11,6 +11,7 @@ import type {
   AuditEntry,
   ContactRecord,
   Department,
+  DepartmentSocialLink,
   EntityName,
   EventItem,
   FacultyMember,
@@ -20,6 +21,7 @@ import type {
   Program,
   MediaRecord,
   DocumentRecord,
+  Notice,
   Project,
   Publication,
   ResearchArea,
@@ -36,7 +38,11 @@ const demoAuditPath = path.join(process.cwd(), ".data", "audit-log.json");
 
 function readDemoStore(): StoreShape {
   try {
-    if (existsSync(demoDataPath)) return JSON.parse(readFileSync(demoDataPath, "utf8")) as StoreShape;
+    if (existsSync(demoDataPath)) {
+      // Merge over the seed so a store written by an earlier release still has
+      // every collection (for example notices added in a later migration).
+      return { ...clone(seedData), ...JSON.parse(readFileSync(demoDataPath, "utf8")) as StoreShape };
+    }
   } catch (error) {
     console.warn("Could not read demo content store; using source seed.", error);
   }
@@ -72,6 +78,7 @@ const entityLabels: Record<EntityName, string> = {
   publications: "Publication",
   achievements: "Achievement",
   events: "Event",
+  notices: "Notice",
   organizations: "Student organization",
   pages: "Page",
   links: "External link",
@@ -83,6 +90,33 @@ const entityLabels: Record<EntityName, string> = {
 
 export function getEntityLabel(entity: EntityName) {
   return entityLabels[entity];
+}
+
+export const socialPlatformOrder: Record<string, number> = { INSTAGRAM: 0, FACEBOOK: 1, LINKEDIN: 2, X: 3, YOUTUBE: 4, WEBSITE: 5, OTHER: 6 };
+
+/**
+ * Public projection for department social links: only configured, well-formed
+ * URLs are ever published, sorted by the stored order. Nothing here can render
+ * markup — the value is always a URL plus an optional label.
+ */
+export function publicSocialLinks(links: DepartmentSocialLink[] | undefined): DepartmentSocialLink[] {
+  return (links || [])
+    .filter((link) => link && typeof link.url === "string" && /^https?:\/\//i.test(link.url.trim()))
+    .map((link, index) => ({
+      ...(link.id ? { id: link.id } : {}),
+      platform: String(link.platform || "OTHER").toUpperCase(),
+      url: link.url.trim(),
+      ...(link.label ? { label: String(link.label) } : {}),
+      order: typeof link.order === "number" ? link.order : index,
+    }))
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+}
+
+/** Public projection for notices: a PDF notice is only publishable when its document is published. */
+export function publicNotice(notice: Notice): Notice | undefined {
+  const type = String(notice.noticeType || "TEXT").toUpperCase();
+  if (type === "PDF" && !notice.pdf) return undefined;
+  return { ...notice, noticeType: type === "PDF" ? "PDF" : "TEXT" };
 }
 
 function assertDataStoreAvailable() {
@@ -270,6 +304,17 @@ export function preparePublicData(data: SiteData): SiteData {
     });
   }
   result.faculty = result.faculty.map((person) => ({ ...person, ...facultyAssets(person, result) }));
+  result.departments = result.departments.map((department) => ({ ...department, socialLinks: publicSocialLinks((department as Department).socialLinks) }));
+  // A PDF notice whose document is missing or unpublished is not publishable:
+  // the PDF itself would 404, so the notice must not appear publicly either.
+  result.notices = result.notices
+    .map((notice) => {
+      const documentId = (notice as Notice & { documentId?: string | null }).documentId;
+      const document = documentId ? result.documents.find((item) => item.id === documentId) : undefined;
+      return { ...notice, ...(document ? { pdf: { url: document.url, title: document.title || notice.title } } : {}) };
+    })
+    .map(publicNotice)
+    .filter((notice): notice is Notice => Boolean(notice));
   return result;
 }
 
@@ -285,6 +330,7 @@ function filterPublished(data: SiteData): SiteData {
     publications: published(data.publications),
     achievements: published(data.achievements),
     events: published(data.events),
+    notices: published(data.notices),
     organizations: published(data.organizations),
     pages: published(data.pages),
     links: published(data.links),
@@ -333,7 +379,9 @@ type EntityQuery = (prisma: PrismaClient, includeDrafts: boolean) => Promise<unk
  */
 const entityQueries: Record<EntityName, EntityQuery> = {
   departments: (prisma, includeDrafts) =>
-    prisma.department.findMany({ where: wherePublished(includeDrafts), orderBy: { name: "asc" } }),
+    prisma.department
+      .findMany({ where: wherePublished(includeDrafts), include: { socialLinks: true }, orderBy: { name: "asc" } })
+      .then((rows) => rows.map((item) => ({ ...item, socialLinks: publicSocialLinks(item.socialLinks) }))),
   programs: (prisma, includeDrafts) =>
     prisma.program
       .findMany({ where: wherePublished(includeDrafts), include: { department: true, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } })
@@ -366,6 +414,15 @@ const entityQueries: Record<EntityName, EntityQuery> = {
     prisma.event
       .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { startsAt: "asc" } })
       .then((rows) => rows.map(mapRowWithDepartment)),
+  notices: (prisma, includeDrafts) =>
+    prisma.notice
+      .findMany({ where: wherePublished(includeDrafts), include: { department: true, document: true }, orderBy: [{ noticeDate: "desc" }, { createdAt: "desc" }] })
+      .then((rows) => rows.map((item) => ({
+        ...mapRowWithDepartment(item),
+        pdf: item.document && item.document.status === "PUBLISHED" && item.document.mimeType === "application/pdf"
+          ? { url: item.document.url, title: item.document.title }
+          : undefined,
+      }))),
   organizations: (prisma, includeDrafts) =>
     prisma.studentOrganization
       .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { name: "asc" } })
@@ -395,7 +452,7 @@ async function getDatabaseEntity(entity: EntityName, includeDrafts: boolean): Pr
 async function getDatabaseData(includeDrafts: boolean): Promise<SiteData> {
   const prisma = getPrisma();
   if (!prisma) throw new Error("DATABASE_URL is required for database content.");
-  const [departments, programs, faculty, laboratories, researchAreas, projects, publications, achievements, events, organizations, pages, links, contacts, settings, media, documents] = await Promise.all([
+  const [departments, programs, faculty, laboratories, researchAreas, projects, publications, achievements, events, notices, organizations, pages, links, contacts, settings, media, documents] = await Promise.all([
     entityQueries.departments(prisma, includeDrafts),
     entityQueries.programs(prisma, includeDrafts),
     entityQueries.faculty(prisma, includeDrafts),
@@ -405,6 +462,7 @@ async function getDatabaseData(includeDrafts: boolean): Promise<SiteData> {
     entityQueries.publications(prisma, includeDrafts),
     entityQueries.achievements(prisma, includeDrafts),
     entityQueries.events(prisma, includeDrafts),
+    entityQueries.notices(prisma, includeDrafts),
     entityQueries.organizations(prisma, includeDrafts),
     entityQueries.pages(prisma, includeDrafts),
     entityQueries.links(prisma, includeDrafts),
@@ -424,6 +482,7 @@ async function getDatabaseData(includeDrafts: boolean): Promise<SiteData> {
     publications: publications as unknown as Publication[],
     achievements: achievements as unknown as Achievement[],
     events: events as unknown as EventItem[],
+    notices: notices as unknown as Notice[],
     organizations: organizations as unknown as StudentOrganization[],
     pages: pages as unknown as PageRecord[],
     links: links as unknown as LinkRecord[],
@@ -448,6 +507,7 @@ async function upsertDatabaseEntity(entity: EntityName, payload: Record<string, 
     case "publications": saved = (id ? await client.publication.update({ where: where!, data: data as never }) : await client.publication.create({ data: data as never })); break;
     case "achievements": saved = (id ? await client.achievement.update({ where: where!, data: data as never }) : await client.achievement.create({ data: data as never })); break;
     case "events": saved = (id ? await client.event.update({ where: where!, data: data as never }) : await client.event.create({ data: data as never })); break;
+    case "notices": saved = (id ? await client.notice.update({ where: where!, data: data as never }) : await client.notice.create({ data: data as never })); break;
     case "organizations": saved = (id ? await client.studentOrganization.update({ where: where!, data: data as never }) : await client.studentOrganization.create({ data: data as never })); break;
     case "pages": saved = (id ? await client.page.update({ where: where!, data: data as never }) : await client.page.create({ data: data as never })); break;
     case "links": saved = (id ? await client.link.update({ where: where!, data: data as never }) : await client.link.create({ data: data as never })); break;
@@ -471,6 +531,7 @@ async function deleteDatabaseEntity(entity: EntityName, id: string, client: TxCl
     case "publications": return client.publication.delete({ where: { id } });
     case "achievements": return client.achievement.delete({ where: { id } });
     case "events": return client.event.delete({ where: { id } });
+    case "notices": return client.notice.delete({ where: { id } });
     case "organizations": return client.studentOrganization.delete({ where: { id } });
     case "pages": return client.page.delete({ where: { id } });
     case "links": return client.link.delete({ where: { id } });
@@ -494,6 +555,23 @@ async function syncRelationships(entity: EntityName, id: string, payload: Record
   const resolveResearchAreas = async (values: string[]) => client.researchArea.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
   const resolveDepartments = async (values: string[]) => client.department.findMany({ where: { OR: [{ slug: { in: values } }, { id: { in: values } }] }, select: { id: true } });
 
+  if (entity === "departments" && payload.socialLinks !== undefined) {
+    // Social links are owned by the department: the submitted list replaces the
+    // stored list atomically, so add/edit/remove all work through one save.
+    const links = Array.isArray(payload.socialLinks) ? payload.socialLinks as Record<string, unknown>[] : [];
+    await client.departmentSocialLink.deleteMany({ where: { departmentId: id } });
+    if (links.length) {
+      await client.departmentSocialLink.createMany({
+        data: links.map((link, index) => ({
+          departmentId: id,
+          platform: String(link.platform),
+          url: String(link.url),
+          label: link.label ? String(link.label) : null,
+          order: typeof link.order === "number" ? link.order : index,
+        })),
+      });
+    }
+  }
   if (entity === "programs" && payload.laboratorySlugs !== undefined) {
     const values = await resolveLaboratories(relationValues(payload.laboratorySlugs));
     await client.programLaboratory.deleteMany({ where: { programId: id } });
@@ -543,7 +621,7 @@ async function syncRelationships(entity: EntityName, id: string, payload: Record
 }
 
 async function normalizeDatabasePayload(entity: EntityName, payload: Record<string, unknown>, id: string | undefined, actorId: string | undefined, client: TxClient) {
-  const omit = new Set(["id", "createdAt", "updatedAt", "publishedAt", "departmentName", "departmentSlug", "status", "authorSlugs", "facultySlugs", "laboratorySlugs", "researchAreaSlugs", "departmentSlugs"]);
+  const omit = new Set(["id", "createdAt", "updatedAt", "publishedAt", "departmentName", "departmentSlug", "status", "authorSlugs", "facultySlugs", "laboratorySlugs", "researchAreaSlugs", "departmentSlugs", "socialLinks"]);
   const data: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(payload)) {
     if (!omit.has(key) && value !== undefined) data[key] = value;
@@ -560,7 +638,7 @@ async function normalizeDatabasePayload(entity: EntityName, payload: Record<stri
   if (entity === "programs" && payload.approvedSeats !== undefined && payload.approvedSeats !== "") data.approvedSeats = Number(payload.approvedSeats);
   if (["achievements", "publications"].includes(entity) && payload.year !== undefined && payload.year !== "") data.year = Number(payload.year);
   if (["media", "documents"].includes(entity) && payload.sizeBytes !== undefined && payload.sizeBytes !== "") data.sizeBytes = Number(payload.sizeBytes);
-  for (const key of ["profileImageId", "cvDocumentId", "organizationId"]) {
+  for (const key of ["profileImageId", "cvDocumentId", "organizationId", "documentId"]) {
     if (payload[key] === "") data[key] = null;
   }
   if (entity === "faculty" && Array.isArray(payload.researchInterests)) data.researchInterests = payload.researchInterests.map(String).join("\n");
@@ -570,8 +648,15 @@ async function normalizeDatabasePayload(entity: EntityName, payload: Record<stri
     if (payload.endsAt) data.endsAt = new Date(String(payload.endsAt));
     else if (payload.endsAt === "") data.endsAt = null;
   }
-  if (entity === "publications" && !data.slug && payload.title) data.slug = slugify(String(payload.title));
-  if (payload.departmentSlug && ["programs", "faculty", "laboratories", "projects", "publications", "achievements", "events", "organizations", "documents"].includes(entity)) {
+  if (entity === "notices") {
+    data.noticeType = String(payload.noticeType || "TEXT").toUpperCase() === "PDF" ? "PDF" : "TEXT";
+    for (const key of ["noticeDate", "expiryDate"]) {
+      if (payload[key] === "" || payload[key] === null) data[key] = key === "noticeDate" ? new Date() : null;
+      else if (payload[key] !== undefined) data[key] = new Date(String(payload[key]));
+    }
+  }
+  if (["publications", "notices"].includes(entity) && !data.slug && payload.title) data.slug = slugify(String(payload.title));
+  if (payload.departmentSlug && ["programs", "faculty", "laboratories", "projects", "publications", "achievements", "events", "notices", "organizations", "documents"].includes(entity)) {
     const department = await client.department.findUnique({ where: { slug: String(payload.departmentSlug) }, select: { id: true } });
     data.departmentId = department?.id;
   }
@@ -621,6 +706,9 @@ export async function searchSite(query: string): Promise<SearchRecord[]> {
       SELECT id, 'Achievement', title, description, '/achievements', category
       FROM "Achievement" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', title, description, category, recipient)) @@ websearch_to_tsquery('simple', ${normalized})
       UNION ALL
+      SELECT id, 'Notice', title, coalesce(summary, body, 'Notice'), '/notices/' || slug, category
+      FROM "Notice" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', title, summary, body, category)) @@ websearch_to_tsquery('simple', ${normalized})
+      UNION ALL
       SELECT id, 'Organization', name, description, '/organizations/' || slug, NULL
       FROM "StudentOrganization" WHERE status = 'PUBLISHED' AND to_tsvector('simple', concat_ws(' ', name, description)) @@ websearch_to_tsquery('simple', ${normalized})
       UNION ALL
@@ -641,6 +729,7 @@ export async function searchSite(query: string): Promise<SearchRecord[]> {
     ...data.projects.map((item) => ({ id: item.id, type: "Project", title: item.title, description: item.summary, href: `/projects#${item.slug}` })),
     ...data.publications.map((item) => ({ id: item.id, type: "Publication", title: item.title, description: item.abstract || item.venue || "Publication", href: `/publications#${item.slug}` })),
     ...data.events.map((item) => ({ id: item.id, type: "Event", title: item.title, description: item.summary, href: `/events#${item.slug}` })),
+    ...data.notices.map((item) => ({ id: item.id, type: "Notice", title: item.title, description: item.summary || item.body || "Notice", href: `/notices/${item.slug}`, meta: item.category })),
     ...data.organizations.map((item) => ({ id: item.id, type: "Organization", title: item.name, description: item.description, href: `/organizations/${item.slug}` })),
     ...data.achievements.map((item) => ({ id: item.id, type: "Achievement", title: item.title, description: item.description, href: "/achievements" })),
   ];

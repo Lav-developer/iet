@@ -1,3 +1,5 @@
+import { MIN_PASSWORD_LENGTH, meetsPasswordPolicy } from "@/lib/password-policy";
+
 export const isProduction = process.env.NODE_ENV === "production";
 export const isDevelopment = process.env.NODE_ENV === "development";
 
@@ -59,8 +61,8 @@ export function demoAuthEnabled() {
 export function assertDemoAuthConfig() {
   const email = process.env.DEMO_ADMIN_EMAIL?.trim();
   const password = process.env.DEMO_ADMIN_PASSWORD;
-  if (!email || !password || password.length < 12) {
-    throw new Error("Demo authentication requires DEMO_ADMIN_EMAIL and a DEMO_ADMIN_PASSWORD of at least 12 characters.");
+  if (!email || !meetsPasswordPolicy(password)) {
+    throw new Error(`Demo authentication requires DEMO_ADMIN_EMAIL and a DEMO_ADMIN_PASSWORD of at least ${MIN_PASSWORD_LENGTH} characters.`);
   }
   return { email, password };
 }
