@@ -12,6 +12,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
+    "db:bootstrap-content": "tsx scripts/bootstrap-content.ts",
     "db:studio": "prisma studio"
   },
   "prisma": {
