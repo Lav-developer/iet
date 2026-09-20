@@ -48,10 +48,13 @@ test("the summary route no longer loads the whole dataset for the dashboard", ()
   assert.match(route, /import \{ getDashboardSummary \} from "@\/lib\/store"/);
   assert.doesNotMatch(route, /getSiteData/, "the whole-dataset loader is not a dashboard read");
   assert.doesNotMatch(route, /Promise\.all/, "no parallel fan-out across every entity");
+  // The dashboard is scoped from the authenticated session, never from the request.
+  assert.match(route, /user\.role === "DEPARTMENT_ADMIN" && user\.departmentId/);
+  assert.doesNotMatch(route, /searchParams|request\.json/, "the scope cannot be supplied by the client");
   const store = readFileSync("lib/store.ts", "utf8");
   // Aggregates only: no rows and no relations are loaded for the dashboard.
-  assert.match(store, /export async function getDashboardSummary\(\): Promise<DashboardSummary>/);
-  assert.match(store, /groupBy\(\{ by: \["status"\], _count: \{ _all: true \} \}\)/);
+  assert.match(store, /export async function getDashboardSummary\(scope\?: EntityScope\): Promise<DashboardSummary>/);
+  assert.match(store, /groupBy\(\{ by: \["status"\], _count: \{ _all: true \}, where: departmentWhere \}\)/);
   const summaryBody = store.slice(store.indexOf("export async function getDashboardSummary"), store.indexOf("export async function getEntity"));
   assert.doesNotMatch(summaryBody, /findMany|include:/, "counters never materialise records or relations");
 });
@@ -67,4 +70,33 @@ test("the dashboard only offers the sign-in link when the session really failed"
   for (const marker of ["Content health at a glance.", "Quick actions", "Platform handover", "admin-stat"]) {
     assert.ok(page.includes(marker), `dashboard still renders ${marker}`);
   }
+});
+
+test("the dashboard summary is scoped by the authenticated role, not by the request", () => {
+  const route = readFileSync("app/api/admin/summary/route.ts", "utf8");
+  // Only a DEPARTMENT_ADMIN with an assigned department gets a scope, and it is
+  // resolved from the session via the database — never from a query parameter.
+  assert.match(route, /const scope = user\.role === "DEPARTMENT_ADMIN" && user\.departmentId/);
+  assert.match(route, /getDashboardSummary\(scope\)/);
+  assert.doesNotMatch(route, /new URL\(request\.url\)/, "no client-supplied scope");
+  const store = readFileSync("lib/store.ts", "utf8");
+  const summary = store.slice(store.indexOf("export async function getDashboardSummary"), store.indexOf("export async function getEntity"));
+  // The scope is part of the aggregate queries, so a department administrator's
+  // totals never include other departments.
+  assert.match(summary, /const departmentWhere = departmentId \? \{ departmentId \} : \{\};/);
+  assert.match(summary, /groupBy\(\{ by: \["status"\], _count: \{ _all: true \}, \.\.\.\(departmentId \? \{ where: \{ id: departmentId \} \} : \{\}\) \}\)/);
+  assert.match(summary, /scope\?\.departmentSlug/);
+});
+
+test("every admin section keeps its own authentication gate", () => {
+  for (const route of ["app/api/admin/summary/route.ts", "app/api/admin/content/route.ts", "app/api/admin/audit/route.ts", "app/api/admin/users/route.ts", "app/api/admin/media/upload/route.ts"]) {
+    const source = readFileSync(route, "utf8");
+    assert.match(source, /requireAdmin\(\)/, `${route} authenticates`);
+  }
+  // The workspace layout redirects unauthenticated visitors before any page runs.
+  const layout = readFileSync("app/admin/(app)/layout.tsx", "utf8");
+  assert.match(layout, /const user = await getSession\(\)/);
+  assert.match(layout, /if \(!user\) redirect\("\/admin\/login"\)/);
+  // Logout clears the session cookie through the existing endpoint.
+  assert.match(readFileSync("app/api/auth/logout/route.ts", "utf8"), /clearSession\(\)/);
 });

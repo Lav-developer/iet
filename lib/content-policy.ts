@@ -221,7 +221,9 @@ export function validatePayload(entity: EntityName, data: Record<string, unknown
   }
   if (entity === "pages" && typeof data.body === "string" && data.body.length > 100000) throw new Error("INVALID_INPUT: Page body is too large.");
   if (entity === "notices") {
-    const noticeType = data.noticeType === undefined ? "TEXT" : String(data.noticeType).toUpperCase();
+    // An unset or empty select means "not provided" and defaults to TEXT, the
+    // same way an absent key does.
+    const noticeType = data.noticeType === undefined || data.noticeType === null || String(data.noticeType).trim() === "" ? "TEXT" : String(data.noticeType).toUpperCase();
     if (!["TEXT", "PDF"].includes(noticeType)) throw new Error("INVALID_INPUT: Notice type must be TEXT or PDF.");
     const body = typeof data.body === "string" ? data.body.trim() : "";
     const documentId = data.documentId === undefined || data.documentId === null ? "" : String(data.documentId).trim();
@@ -246,4 +248,146 @@ export function slugify(input: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 80);
+}
+
+/* ------------------------------------------------------------------ */
+/* Department contact configuration                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Editorial responsibilities a department can configure. The list is a
+ * convenience for the CMS select, not a rule: any department may keep its own
+ * free-text label, because no single responsibility is universal.
+ */
+export const departmentContactRoleValues = ["Coordinator", "Department In-Charge", "Head of Department", "Programme Coordinator"] as const;
+export const MAX_DEPARTMENT_CONTACTS = 6;
+const MAX_CONTACT_ROLE_LENGTH = 60;
+
+/** A faculty slug as produced by `slugify` — used to reject anything else. */
+const facultySlugPattern = /^[a-z0-9][a-z0-9-]{0,119}$/;
+
+/**
+ * Normalizes and validates a department's contact configuration. Accepts the
+ * faculty **slug** (never a raw id typed by a human) plus the configured role
+ * label, rejects duplicates, and returns entries with their display order.
+ */
+export function validateDepartmentContacts(value: unknown): { role: string; facultySlug: string; order: number }[] {
+  if (value === undefined || value === null || value === "") return [];
+  if (!Array.isArray(value)) throw new Error("INVALID_INPUT: Department contacts must be a list.");
+  if (value.length > MAX_DEPARTMENT_CONTACTS) throw new Error(`INVALID_INPUT: A department may configure at most ${MAX_DEPARTMENT_CONTACTS} contacts.`);
+  const seen = new Set<string>();
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") throw new Error("INVALID_INPUT: Each department contact needs a responsibility and a person.");
+    const raw = entry as Record<string, unknown>;
+    const role = String(raw.role ?? "").trim();
+    if (!role || role.length > MAX_CONTACT_ROLE_LENGTH) throw new Error(`INVALID_INPUT: Each contact needs a responsibility of at most ${MAX_CONTACT_ROLE_LENGTH} characters.`);
+    const facultySlug = String(raw.facultySlug ?? "").trim();
+    // The CMS selector submits the faculty member's slug, never a hand-typed id.
+    // Malformed values are rejected here; a well-formed slug that is not part
+    // of the department is rejected by the membership check at write time.
+    if (!facultySlugPattern.test(facultySlug)) throw new Error("INVALID_INPUT: Select a faculty member by name from the department list.");
+    if (seen.has(facultySlug)) throw new Error("INVALID_INPUT: The same faculty member cannot hold two configured responsibilities.");
+    seen.add(facultySlug);
+    return { role, facultySlug, order: index };
+  });
+}
+
+/**
+ * Who may maintain a department's configured contacts:
+ * - SUPER_ADMIN / IET_ADMIN: any department (their existing institute-wide authority).
+ * - DEPARTMENT_ADMIN: only their own assigned department.
+ * - EDITOR: not part of the existing editorial scope for department configuration.
+ * The decision is pure, and the API repeats it server-side before any write.
+ */
+export function canConfigureDepartmentContacts(user: PolicyUser, targetDepartmentSlug: string, assignedDepartmentSlug?: string): boolean {
+  if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") return true;
+  if (user.role === "DEPARTMENT_ADMIN") return Boolean(user.departmentId && assignedDepartmentSlug && assignedDepartmentSlug === targetDepartmentSlug);
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Role-aware CMS surface                                              */
+/* ------------------------------------------------------------------ */
+
+export type AdminSection = "dashboard" | "audit" | "users" | "departmentContacts";
+
+/**
+ * Role-aware CMS navigation/action visibility. This is the same policy the
+ * server enforces (see `canAccess`): it only decides what the workspace shows,
+ * and every route still authorizes each request independently. No role
+ * definition is duplicated outside this module.
+ */
+export function visibleAdminSections(user: PolicyUser): AdminSection[] {
+  if (user.role === "SUPER_ADMIN") return ["dashboard", "audit", "users", "departmentContacts"];
+  if (user.role === "IET_ADMIN") return ["dashboard", "audit", "users", "departmentContacts"];
+  if (user.role === "DEPARTMENT_ADMIN") return user.departmentId ? ["dashboard", "departmentContacts"] : ["dashboard"];
+  return ["dashboard"];
+}
+
+export type EntityCapability = { entity: EntityName; canCreate: boolean; canDelete: boolean };
+
+/**
+ * Entities a role may work with in the CMS, plus the coarse actions the
+ * workspace may offer. Record-level decisions (department, workflow status,
+ * ownership) are still made by `canAccess`/`workflowTransitionAllowed` on every
+ * request — a hidden control is never the protection.
+ */
+export function visibleEntities(user: PolicyUser): EntityCapability[] {
+  if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") return entityValues.map((entity) => ({ entity, canCreate: true, canDelete: true }));
+  if (user.role === "EDITOR") return entityValues.map((entity) => ({ entity, canCreate: true, canDelete: false }));
+  if (user.role === "DEPARTMENT_ADMIN" && user.departmentId) {
+    return entityValues.filter((entity) => departmentScoped.has(entity)).map((entity) => ({ entity, canCreate: true, canDelete: false }));
+  }
+  return [];
+}
+
+/** User administration is limited to the roles the users API accepts. */
+export function canManageUsers(user: PolicyUser): boolean {
+  return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
+}
+
+/** Audit logs follow the same rule as /api/admin/audit. */
+export function canViewAuditLogs(user: PolicyUser): boolean {
+  return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
+}
+
+/** Roles allowed to attach an institute-wide department on a notice. */
+export function canPublishInstitutionWideNotice(user: PolicyUser): boolean {
+  return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN" || user.role === "EDITOR";
+}
+
+export type EntityCapabilityDetail = {
+  canCreate: boolean;
+  canDelete: boolean;
+  /** Statuses the CMS may offer when creating a record (policy: always DRAFT). */
+  createStatusOptions: string[];
+  /** Statuses the CMS may offer when editing an existing record. */
+  editStatusOptions: string[];
+  /** Set for DEPARTMENT_ADMIN: their content is always tied to this department. */
+  fixedDepartmentSlug?: string;
+};
+
+/**
+ * What the CMS may offer for one entity and one role. Derived from the same
+ * policy that `canAccess`/`workflowTransitionAllowed` enforce server-side, so
+ * the workspace can hide what the API would reject without inventing rules.
+ */
+export function entityCapability(user: PolicyUser, entity: EntityName, assignedDepartmentSlug?: string): EntityCapabilityDetail {
+  const everyStatus = ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"];
+  if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") {
+    return { canCreate: true, canDelete: true, createStatusOptions: ["DRAFT"], editStatusOptions: everyStatus };
+  }
+  if (user.role === "EDITOR") {
+    return { canCreate: true, canDelete: false, createStatusOptions: ["DRAFT"], editStatusOptions: ["DRAFT", "REVIEW"] };
+  }
+  if (user.role === "DEPARTMENT_ADMIN" && user.departmentId && departmentScoped.has(entity)) {
+    return {
+      canCreate: true,
+      canDelete: false,
+      createStatusOptions: ["DRAFT"],
+      editStatusOptions: ["DRAFT", "REVIEW"],
+      ...(assignedDepartmentSlug ? { fixedDepartmentSlug: assignedDepartmentSlug } : {}),
+    };
+  }
+  return { canCreate: false, canDelete: false, createStatusOptions: ["DRAFT"], editStatusOptions: ["DRAFT"] };
 }

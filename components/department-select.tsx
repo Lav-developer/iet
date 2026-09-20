@@ -29,6 +29,7 @@ export function DepartmentSelect({
   hint,
   disabled = false,
   id,
+  noneLabel,
 }: {
   value: string;
   onChange: (id: string) => void;
@@ -38,6 +39,8 @@ export function DepartmentSelect({
   hint?: string;
   disabled?: boolean;
   id?: string;
+  /** Optional "no department" choice, for institute-wide records. */
+  noneLabel?: string;
 }) {
   const generatedId = useId();
   const inputId = id || `department-select-${generatedId}`;
@@ -105,6 +108,11 @@ export function DepartmentSelect({
       />
     </div>
     {open && <ul className="department-select-list" id={listId} role="listbox" aria-label={label}>
+      {noneLabel && (!query.trim() || noneLabel.toLowerCase().includes(query.trim().toLowerCase())) && <li id={`${listId}-none`} role="option" aria-selected={value === ""}>
+        <button type="button" className="department-select-option" onMouseEnter={() => setHighlight(-1)} onClick={() => { onChange(""); setQuery(""); setOpen(false); }}>
+          <span>{noneLabel}</span>
+        </button>
+      </li>}
       {filtered.length === 0 && <li className="department-select-empty" aria-disabled="true">No department matches “{query}”.</li>}
       {filtered.map((option, index) => {
         const isSelected = option.id === value;

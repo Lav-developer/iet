@@ -66,6 +66,7 @@ model Department {
   documents          Document[]
   notices            Notice[]
   socialLinks        DepartmentSocialLink[]
+  contacts           DepartmentContact[]
   departmentResearch DepartmentResearchArea[]
 
   @@index([status])
@@ -127,6 +128,7 @@ model FacultyMember {
   projects          ProjectFaculty[]
   publications      PublicationFaculty[]
   laboratories      FacultyLaboratory[]
+  departmentContacts DepartmentContact[]
 
   @@index([departmentId])
   @@index([designation])
@@ -515,6 +517,32 @@ model DepartmentSocialLink {
 
   @@index([departmentId])
   @@index([platform])
+}
+
+/**
+ * Explicit department-level contact configuration.
+ *
+ * A department's public contact is an editorial decision, so it is stored as
+ * its own relationship instead of being inferred from faculty ordering or from
+ * a free-text designation: the department selects the faculty member and the
+ * responsibility that person holds (Coordinator, Department In-Charge, Head of
+ * Department, Programme Coordinator, …). `role` is the configured label shown
+ * publicly, so no single responsibility is assumed for every department.
+ */
+model DepartmentContact {
+  id           String        @id @default(cuid())
+  departmentId String
+  facultyId    String
+  role         String
+  order        Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  department   Department    @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  faculty      FacultyMember @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, facultyId])
+  @@index([departmentId])
+  @@index([facultyId])
 }
 
 /**

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { getPrisma } from "@/lib/db";
 import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
-import { resolveDepartmentAssignment } from "@/lib/user-roles";
+import { canActOnAccount, resolveDepartmentAssignment } from "@/lib/user-roles";
 
 const roleSchema = z.enum(["SUPER_ADMIN", "IET_ADMIN", "DEPARTMENT_ADMIN", "EDITOR"]);
 const departmentIdSchema = z.string().trim().max(200).nullable().optional();
@@ -19,8 +19,8 @@ function ipAddress(request: Request) {
 }
 
 function permitted(actor: { role: string }, target: { role: string }) {
-  if (actor.role === "SUPER_ADMIN") return true;
-  return actor.role === "IET_ADMIN" && target.role !== "SUPER_ADMIN";
+  // Shared with the Users screen (lib/user-roles): one rule, not two.
+  return canActOnAccount(actor, target);
 }
 
 /**
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
     // User creation + audit entry are atomic.
     const user = await prisma.$transaction(async (tx) => {
       const created = await tx.user.create({ data: { email: input.email.toLowerCase(), name: input.name, passwordHash, role: input.role, departmentId: assignment.departmentId }, select: { id: true, email: true, name: true, role: true, departmentId: true, active: true, sessionVersion: true } });
-      await tx.auditLog.create({ data: { userId: actor.id, role: actor.role as any, action: "CREATED", entity: "users", entityId: created.id, ipAddress: ipAddress(request), afterJson: JSON.stringify({ email: created.email, role: created.role }) } });
+      await tx.auditLog.create({ data: { userId: actor.id, role: actor.role, action: "CREATED", entity: "users", entityId: created.id, ipAddress: ipAddress(request), afterJson: JSON.stringify({ email: created.email, role: created.role }) } });
       return created;
     });
     return NextResponse.json({ user }, { status: 201 });
@@ -108,7 +108,7 @@ export async function PATCH(request: Request) {
     // happens in the same write.
     const user = await prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({ where: { id: target.id }, data: { name: body.data.name, passwordHash, role: body.data.role, departmentId: assignment.departmentId, active: body.data.active, ...(mustInvalidate ? { sessionVersion: { increment: 1 } } : {}) }, select: { id: true, email: true, name: true, role: true, departmentId: true, active: true, sessionVersion: true } });
-      await tx.auditLog.create({ data: { userId: actor.id, role: actor.role as any, action: mustInvalidate ? "UPDATED_AND_INVALIDATED_SESSIONS" : "UPDATED", entity: "users", entityId: user.id, ipAddress: ipAddress(request), afterJson: JSON.stringify({ email: user.email, role: user.role, active: user.active }) } });
+      await tx.auditLog.create({ data: { userId: actor.id, role: actor.role, action: mustInvalidate ? "UPDATED_AND_INVALIDATED_SESSIONS" : "UPDATED", entity: "users", entityId: updated.id, ipAddress: ipAddress(request), afterJson: JSON.stringify({ email: updated.email, role: updated.role, active: updated.active }) } });
       return updated;
     });
     return NextResponse.json({ user });
@@ -131,7 +131,7 @@ export async function DELETE(request: Request) {
     // Deactivation + session invalidation + audit entry are atomic.
     const user = await prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({ where: { id: target.id }, data: { active: false, sessionVersion: { increment: 1 } }, select: { id: true, email: true, name: true, role: true, active: true } });
-      await tx.auditLog.create({ data: { userId: actor.id, role: actor.role as any, action: "DEACTIVATED_AND_INVALIDATED_SESSIONS", entity: "users", entityId: user.id, ipAddress: ipAddress(request), afterJson: JSON.stringify({ email: user.email }) } });
+      await tx.auditLog.create({ data: { userId: actor.id, role: actor.role, action: "DEACTIVATED_AND_INVALIDATED_SESSIONS", entity: "users", entityId: updated.id, ipAddress: ipAddress(request), afterJson: JSON.stringify({ email: updated.email }) } });
       return updated;
     });
     return NextResponse.json({ user });

@@ -48,13 +48,13 @@ test("every password length check uses the shared constant, with no hardcoded 12
   }
   assert.deepEqual(offenders, [], `stale 12-character password policy in: ${offenders.join(", ")}`);
 
-  for (const file of ["lib/config.ts", "app/api/admin/users/route.ts", "scripts/bootstrap-admin.ts", "prisma/seed.ts", "app/admin/(app)/users/page.tsx"]) {
+  for (const file of ["lib/config.ts", "app/api/admin/users/route.ts", "scripts/bootstrap-admin.ts", "prisma/seed.ts", "components/users-admin.tsx"]) {
     assert.match(readFileSync(file, "utf8"), /password-policy/, `${file} imports the shared policy`);
   }
 });
 
 test("user-facing validation messages advertise the 8-character minimum", () => {
-  const page = readFileSync("app/admin/(app)/users/page.tsx", "utf8");
+  const page = readFileSync("components/users-admin.tsx", "utf8");
   assert.match(page, /minLength=\{MIN_PASSWORD_LENGTH\}/);
   assert.match(page, /PASSWORD_REQUIREMENT/);
   assert.match(readFileSync("lib/password-policy.ts", "utf8"), /PASSWORD_REQUIREMENT = `At least \$\{MIN_PASSWORD_LENGTH\} characters\.`/);

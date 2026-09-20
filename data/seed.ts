@@ -17,6 +17,7 @@ export const seedData: SiteData = {
         "The Department of Applied Sciences & Humanities forms the academic foundation of engineering education at DSMNRU. It integrates Mathematics, Physics, Chemistry and Humanities with communication skills, professional ethics, environmental consciousness and social responsibility for first-year B.Tech students.",
       sourceNote: "IET-DSMNRU profile PDF, pages 7–9.",
       status: "PUBLISHED",
+      contacts: [{ role: "Coordinator", facultySlug: "archana-awasthi" }],
     },
     {
       id: "dept-cse",
@@ -28,6 +29,7 @@ export const seedData: SiteData = {
         "Established in 2016, the CSE department has expanded its academic portfolio with postgraduate programmes in Artificial Intelligence & Machine Learning and Artificial Intelligence & Data Science, followed by undergraduate honours programmes in emerging interdisciplinary domains.",
       sourceNote: "IET-DSMNRU profile PDF, pages 10–13. The source profile reports 11 faculty members; only the detailed profiles supplied in the document are published here.",
       status: "PUBLISHED",
+      contacts: [{ role: "Department In-Charge", facultySlug: "adarsh-vardhan-srivastava" }],
     },
     {
       id: "dept-ce",
@@ -39,6 +41,7 @@ export const seedData: SiteData = {
         "The Civil Engineering Department offers B.Tech. education in a barrier-free campus and connects foundational engineering education with real-world applications such as structural design and environmental management. The department profile describes a four-year, eight-semester programme with multi-exit and multi-entry options aligned with NEP 2020.",
       sourceNote: "IET-DSMNRU profile PDF, pages 13–14.",
       status: "PUBLISHED",
+      contacts: [{ role: "Coordinator", facultySlug: "kunwar-haribhanu-singh" }],
     },
     {
       id: "dept-ece",
@@ -49,6 +52,7 @@ export const seedData: SiteData = {
         "The department combines core electronics with Artificial Intelligence, Machine Learning, Embedded Systems and Rehabilitation Engineering. Its profile places particular emphasis on assistive and smart healthcare technologies, affordable rehabilitation devices, intelligent communication systems, wearable electronics and AI-driven biomedical applications.",
       sourceNote: "IET-DSMNRU profile PDF, pages 14–16.",
       status: "PUBLISHED",
+      contacts: [{ role: "Coordinator", facultySlug: "shekhar-yadav" }],
     },
     {
       id: "dept-me",
@@ -60,6 +64,7 @@ export const seedData: SiteData = {
         "The Mechanical Engineering Department is part of the Faculty of Engineering & Technology and offers B.Tech. education in a barrier-free campus. The department profile describes a four-year, eight-semester programme with multi-exit and multi-entry options aligned with NEP 2020.",
       sourceNote: "IET-DSMNRU profile PDF, pages 16–18.",
       status: "PUBLISHED",
+      contacts: [{ role: "Coordinator", facultySlug: "rakesh-verma" }],
     },
     {
       id: "dept-ee",
@@ -70,6 +75,7 @@ export const seedData: SiteData = {
         "The Electrical Engineering Department aims to build an inclusive, barrier-free academic environment with accessible infrastructure, adaptive teaching methods and assistive technologies. It combines core and emerging electrical engineering education with mentoring, research, innovation and industry–academia opportunities.",
       sourceNote: "IET-DSMNRU profile PDF, pages 19–20.",
       status: "PUBLISHED",
+      contacts: [{ role: "Coordinator", facultySlug: "dinesh-kumar-nishad" }],
     },
   ],
   programs: [

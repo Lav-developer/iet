@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { seedData } from "../data/seed";
-import { facultyAssets, safeExternalUrl, selectDepartmentContact } from "../lib/public-content";
+import { facultyAssets, safeExternalUrl } from "../lib/public-content";
 import { publicCopy } from "../lib/public-copy";
 import { preparePublicData } from "../lib/store";
 import { sanitize, validatePayload } from "../lib/content-policy";
@@ -18,24 +18,6 @@ import FacultyProfilePage from "../app/(public)/faculty/[slug]/page";
 // tsx uses the classic transform for the repository's Next-managed JSX setting.
 Object.assign(globalThis, { React });
 const person = (overrides: Partial<FacultyMember> = {}): FacultyMember => ({ id: "a", slug: "a", name: "Aakash", designation: "Assistant Professor", departmentSlug: "cse", type: "FACULTY", status: "PUBLISHED", ...overrides });
-
-test("department coordinator is preferred even when not first alphabetically, without sorting the directory", () => {
-  const people = [person(), person({ id: "b", slug: "b", name: "Archana", designation: "Assistant Professor (Coordinator)" })];
-  const before = [...people]; const result = selectDepartmentContact(people, "cse");
-  assert.equal(result.person?.name, "Archana"); assert.equal(result.label, "Department Coordinator"); assert.deepEqual(people, before);
-});
-test("no coordinator falls back to the first published faculty in the department", () => {
-  const result = selectDepartmentContact([person({ status: "DRAFT" }), person({ id: "other", departmentSlug: "other" }), person({ id: "staff", type: "LABORATORY STAFF" }), person({ id: "published" })], "cse");
-  assert.equal(result.person?.id, "published"); assert.equal(result.label, "Department Contact");
-});
-test("no faculty yields no contact", () => assert.equal(selectDepartmentContact([], "cse").person, undefined));
-test("coordinator matching is case-insensitive and requires parentheses", () => {
-  assert.equal(selectDepartmentContact([person({ designation: "Coordinator" }), person({ id: "mixed", designation: "Assistant Professor (cOoRdInAtOr)" })], "cse").person?.id, "mixed");
-});
-test("multiple coordinators have a deterministic name/slug tie-breaker", () => {
-  const people = [person({ id: "b", slug: "b", designation: "Professor (Coordinator)" }), person({ id: "a", designation: "Professor (Coordinator)" })];
-  assert.equal(selectDepartmentContact(people, "cse").person?.id, "a"); assert.equal(selectDepartmentContact([...people].reverse(), "cse").person?.id, "a");
-});
 
 test("external links reject unsafe schemes, credentials, whitespace and non-HTTPS CVs", () => {
   for (const url of ["javascript:alert(1)", "data:text/html,test", "//example.org", "https://user:pass@example.org", "https://example.org/\ncv", "invalid"]) assert.equal(safeExternalUrl(url), undefined);

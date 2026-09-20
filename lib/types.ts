@@ -12,6 +12,19 @@ export type DepartmentSocialLink = {
   order?: number;
 };
 
+/**
+ * A department's explicitly configured contact/responsibility entry. The role
+ * label is editorial (Coordinator, Department In-Charge, Head of Department,
+ * Programme Coordinator, …) and the person is referenced by slug, so the public
+ * card always renders that person's own details.
+ */
+export type DepartmentContact = {
+  id?: string;
+  role: string;
+  order?: number;
+  facultySlug: string;
+};
+
 export type Department = {
   id: string;
   slug: string;
@@ -21,6 +34,8 @@ export type Department = {
   established?: string;
   sourceNote?: string;
   socialLinks?: DepartmentSocialLink[];
+  /** Explicitly configured contacts, in display order. */
+  contacts?: DepartmentContact[];
   status: ContentStatus;
 };
 

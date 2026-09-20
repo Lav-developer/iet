@@ -110,7 +110,7 @@ test("account scope labels describe each role honestly", () => {
 
 test("the users API applies the shared policy to create and update, and stores the internal id", () => {
   const route = readFileSync("app/api/admin/users/route.ts", "utf8");
-  assert.match(route, /import \{ resolveDepartmentAssignment \} from "@\/lib\/user-roles"/);
+  assert.match(route, /import \{ canActOnAccount, resolveDepartmentAssignment \} from "@\/lib\/user-roles"/);
   assert.match(route, /resolveDepartmentAssignment\(\{ role, departmentId, currentDepartmentId \}/);
   assert.match(route, /departmentId: assignment\.departmentId/, "the resolved internal id is what gets stored");
   // The inline rules it replaces are gone.
@@ -126,7 +126,7 @@ test("the users API applies the shared policy to create and update, and stores t
 });
 
 test("the admin UI shows the department selector only for DEPARTMENT_ADMIN, in create and edit", () => {
-  const page = readFileSync("app/admin/(app)/users/page.tsx", "utf8");
+  const page = readFileSync("components/users-admin.tsx", "utf8");
   assert.match(page, /\{form\.role === "DEPARTMENT_ADMIN" && <DepartmentSelect/, "create flow is role-conditional");
   assert.match(page, /\{editing\.role === "DEPARTMENT_ADMIN" && <DepartmentSelect/, "edit flow is role-conditional");
   assert.equal((page.match(/<DepartmentSelect/g) || []).length, 2, "exactly one selector per flow");

@@ -1,5 +1,7 @@
 import { publicCopy } from "@/lib/public-copy";
+import type { DepartmentContact } from "@/lib/types";
 import { facultyAssets } from "@/lib/public-content";
+import { departmentScoped } from "@/lib/content-policy";
 import { seedData } from "@/data/seed";
 import { databaseConfigured, getPrisma } from "@/lib/db";
 import { assertProductionConfig, isProduction } from "@/lib/config";
@@ -173,25 +175,43 @@ function statFromRows(label: string, rows: { status?: string }[]): DashboardStat
   return { label, total: rows.length, published, drafts: rows.length - published };
 }
 
-export async function getDashboardSummary(): Promise<DashboardSummary> {
+export async function getDashboardSummary(scope?: EntityScope): Promise<DashboardSummary> {
   assertDataStoreAvailable();
   if (!databaseConfigured) {
     // Preview/dev file store: counted from the same records the dashboard
-    // view has always shown (drafts included).
+    // view has always shown (drafts included), scoped the same way as the
+    // database path.
     const data = readDemoStore();
-    const stats = dashboardEntities.map(({ label, entity }) => statFromRows(label, (data[entity] as { status?: string }[]) || []));
+    const rowsFor = (entity: "departments" | "programs" | "faculty" | "laboratories") => {
+      const rows = (data[entity] as { status?: string; departmentSlug?: string }[]) || [];
+      if (!scope?.departmentSlug) return rows;
+      return entity === "departments" ? rows.filter((row) => (row as { slug?: string }).slug === scope.departmentSlug) : rows.filter((row) => row.departmentSlug === scope.departmentSlug);
+    };
+    const stats = dashboardEntities.map(({ label, entity }) => statFromRows(label, rowsFor(entity)));
     return { mode: "demo", stats, publishedDepartments: stats[0].published, hasPublishedDepartment: stats[0].published > 0 };
   }
 
   const prisma = getPrisma();
   if (!prisma) throw new Error("DATABASE_URL is required for database content.");
 
+  // A department administrator's counters cover their own department only: the
+  // scope is part of the aggregate query, so institution-wide totals are never
+  // computed (or returned) for them.
+  const departmentId = scope?.departmentSlug
+    ? (await prisma.department.findUnique({ where: { slug: scope.departmentSlug }, select: { id: true } }))?.id
+    : undefined;
+  if (scope?.departmentSlug && !departmentId) {
+    const stats = dashboardEntities.map(({ label }) => ({ label, total: 0, published: 0, drafts: 0 }));
+    return { mode: "database", stats, publishedDepartments: 0, hasPublishedDepartment: false };
+  }
+  const departmentWhere = departmentId ? { departmentId } : {};
+
   // Sequential on purpose: one aggregate query at a time, so a dashboard
   // request never opens a connection per entity simultaneously.
-  const departments = await prisma.department.groupBy({ by: ["status"], _count: { _all: true } });
-  const programs = await prisma.program.groupBy({ by: ["status"], _count: { _all: true } });
-  const faculty = await prisma.facultyMember.groupBy({ by: ["status"], _count: { _all: true } });
-  const laboratories = await prisma.laboratory.groupBy({ by: ["status"], _count: { _all: true } });
+  const departments = await prisma.department.groupBy({ by: ["status"], _count: { _all: true }, ...(departmentId ? { where: { id: departmentId } } : {}) });
+  const programs = await prisma.program.groupBy({ by: ["status"], _count: { _all: true }, where: departmentWhere });
+  const faculty = await prisma.facultyMember.groupBy({ by: ["status"], _count: { _all: true }, where: departmentWhere });
+  const laboratories = await prisma.laboratory.groupBy({ by: ["status"], _count: { _all: true }, where: departmentWhere });
   const totals = [summarizeStatusCounts(departments), summarizeStatusCounts(programs), summarizeStatusCounts(faculty), summarizeStatusCounts(laboratories)];
 
   const stats = dashboardEntities.map(({ label }, index) => ({
@@ -204,9 +224,9 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   return { mode: "database", stats, publishedDepartments: departmentTotals.published, hasPublishedDepartment: departmentTotals.published > 0 };
 }
 
-export async function getEntity(entity: EntityName, includeDrafts = true): Promise<unknown[]> {
+export async function getEntity(entity: EntityName, includeDrafts = true, scope?: EntityScope): Promise<unknown[]> {
   assertDataStoreAvailable();
-  if (databaseConfigured) return (await getDatabaseEntity(entity, includeDrafts)) || [];
+  if (databaseConfigured) return (await getDatabaseEntity(entity, includeDrafts, scope)) || [];
   const records = readDemoStore()[entity] as unknown[];
   if (!includeDrafts) return records.filter((item: unknown) => (item as { status?: string }).status === "PUBLISHED");
   return clone(records);
@@ -415,6 +435,17 @@ function wherePublished(includeDrafts: boolean) {
   return includeDrafts ? {} : { status: "PUBLISHED" as const };
 }
 
+/**
+ * A department scope is expressed as a relation filter on the department the
+ * record belongs to, so PostgreSQL returns only that department's rows. It is
+ * applied to the entities the policy models as department-owned; institution-
+ * wide records (pages, links, contacts, settings, media) are never filtered.
+ */
+function scopedDepartmentWhere(entity: EntityName, scope?: EntityScope) {
+  if (!scope?.departmentSlug) return {};
+  return departmentScoped.has(entity) ? { department: { slug: scope.departmentSlug } } : {};
+}
+
 function mapFacultyRow(item: {
   id: string; slug: string; name: string; designation: string;
   researchInterests: string | null;
@@ -436,7 +467,26 @@ function mapRowWithDepartment<T extends { department?: { slug: string; name: str
   return { ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name };
 }
 
-type EntityQuery = (prisma: PrismaClient, includeDrafts: boolean) => Promise<unknown[]>;
+/**
+ * Public/admin projection of configured department contacts. Contacts whose
+ * person has no resolvable faculty record are dropped rather than being
+ * replaced by anything else — an unconfigured department never inherits the
+ * first faculty row.
+ */
+function mapDepartmentContacts(rows: { id: string; role: string; order: number; faculty?: { slug: string } | null }[] | undefined): Required<DepartmentContact>[] {
+  return (rows || [])
+    .filter((row) => Boolean(row.faculty?.slug))
+    .map((row) => ({ id: row.id, role: row.role, order: row.order, facultySlug: String(row.faculty?.slug) }))
+    .sort((a, b) => a.order - b.order || a.role.localeCompare(b.role, "en") || a.facultySlug.localeCompare(b.facultySlug, "en"));
+}
+
+/**
+ * Server-side department scope for admin reads. It is applied in the database
+ * query itself (never after fetching every row, and never in the browser), and
+ * only to entities the policy marks as department-owned.
+ */
+export type EntityScope = { departmentSlug?: string };
+type EntityQuery = (prisma: PrismaClient, includeDrafts: boolean, scope?: EntityScope) => Promise<unknown[]>;
 
 /**
  * One scoped query per entity — used by admin entity reads, single-record
@@ -446,52 +496,52 @@ type EntityQuery = (prisma: PrismaClient, includeDrafts: boolean) => Promise<unk
 const entityQueries: Record<EntityName, EntityQuery> = {
   departments: (prisma, includeDrafts) =>
     prisma.department
-      .findMany({ where: wherePublished(includeDrafts), include: { socialLinks: true }, orderBy: { name: "asc" } })
-      .then((rows) => rows.map((item) => ({ ...item, socialLinks: publicSocialLinks(item.socialLinks) }))),
-  programs: (prisma, includeDrafts) =>
+      .findMany({ where: wherePublished(includeDrafts), include: { socialLinks: true, contacts: { include: { faculty: { select: { slug: true } } } } }, orderBy: { name: "asc" } })
+      .then((rows) => rows.map((item) => ({ ...item, socialLinks: publicSocialLinks(item.socialLinks), contacts: mapDepartmentContacts(item.contacts) }))),
+  programs: (prisma, includeDrafts, scope) =>
     prisma.program
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("programs", scope) }, include: { department: true, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } })
       .then((rows) => rows.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name, laboratorySlugs: item.laboratories.map((join) => join.laboratory.slug) }))),
-  faculty: (prisma, includeDrafts) =>
+  faculty: (prisma, includeDrafts, scope) =>
     prisma.facultyMember
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true, researchAreas: { include: { researchArea: true } }, laboratories: { include: { laboratory: true } } }, orderBy: { name: "asc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("faculty", scope) }, include: { department: true, researchAreas: { include: { researchArea: true } }, laboratories: { include: { laboratory: true } } }, orderBy: { name: "asc" } })
       .then((rows) => rows.map(mapFacultyRow)),
-  laboratories: (prisma, includeDrafts) =>
+  laboratories: (prisma, includeDrafts, scope) =>
     prisma.laboratory
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { name: "asc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("laboratories", scope) }, include: { department: true }, orderBy: { name: "asc" } })
       .then((rows) => rows.map(mapRowWithDepartment)),
   researchAreas: (prisma, includeDrafts) =>
     prisma.researchArea
       .findMany({ where: wherePublished(includeDrafts), include: { faculty: { include: { faculty: true } }, departments: { include: { department: true } } }, orderBy: { name: "asc" } })
       .then((rows) => rows.map((item) => ({ ...item, facultySlugs: item.faculty.map((join) => join.faculty.slug), departmentSlugs: item.departments.map((join) => join.department.slug) }))),
-  projects: (prisma, includeDrafts) =>
+  projects: (prisma, includeDrafts, scope) =>
     prisma.project
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true, faculty: { include: { faculty: true } }, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("projects", scope) }, include: { department: true, faculty: { include: { faculty: true } }, laboratories: { include: { laboratory: true } } }, orderBy: { title: "asc" } })
       .then((rows) => rows.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name, facultySlugs: item.faculty.map((join) => join.faculty.slug), laboratorySlugs: item.laboratories.map((join) => join.laboratory.slug) }))),
-  publications: (prisma, includeDrafts) =>
+  publications: (prisma, includeDrafts, scope) =>
     prisma.publication
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true, authors: { include: { faculty: true } } }, orderBy: { year: "desc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("publications", scope) }, include: { department: true, authors: { include: { faculty: true } } }, orderBy: { year: "desc" } })
       .then((rows) => rows.map((item) => ({ ...item, departmentSlug: item.department?.slug, departmentName: item.department?.name, authorSlugs: item.authors.map((author) => author.faculty.slug) }))),
-  achievements: (prisma, includeDrafts) =>
+  achievements: (prisma, includeDrafts, scope) =>
     prisma.achievement
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { year: "desc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("achievements", scope) }, include: { department: true }, orderBy: { year: "desc" } })
       .then((rows) => rows.map(mapRowWithDepartment)),
-  events: (prisma, includeDrafts) =>
+  events: (prisma, includeDrafts, scope) =>
     prisma.event
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { startsAt: "asc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("events", scope) }, include: { department: true }, orderBy: { startsAt: "asc" } })
       .then((rows) => rows.map(mapRowWithDepartment)),
-  notices: (prisma, includeDrafts) =>
+  notices: (prisma, includeDrafts, scope) =>
     prisma.notice
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true, document: true }, orderBy: [{ noticeDate: "desc" }, { createdAt: "desc" }] })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("notices", scope) }, include: { department: true, document: true }, orderBy: [{ noticeDate: "desc" }, { createdAt: "desc" }] })
       .then((rows) => rows.map((item) => ({
         ...mapRowWithDepartment(item),
         pdf: item.document && item.document.status === "PUBLISHED" && item.document.mimeType === "application/pdf"
           ? { url: item.document.url, title: item.document.title }
           : undefined,
       }))),
-  organizations: (prisma, includeDrafts) =>
+  organizations: (prisma, includeDrafts, scope) =>
     prisma.studentOrganization
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { name: "asc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("organizations", scope) }, include: { department: true }, orderBy: { name: "asc" } })
       .then((rows) => rows.map(mapRowWithDepartment)),
   pages: (prisma, includeDrafts) =>
     prisma.page.findMany({ where: wherePublished(includeDrafts), orderBy: { title: "asc" } }),
@@ -503,16 +553,16 @@ const entityQueries: Record<EntityName, EntityQuery> = {
     prisma.siteSetting.findMany({ orderBy: { key: "asc" } }),
   media: (prisma) =>
     prisma.media.findMany({ orderBy: { createdAt: "desc" } }),
-  documents: (prisma, includeDrafts) =>
+  documents: (prisma, includeDrafts, scope) =>
     prisma.document
-      .findMany({ where: wherePublished(includeDrafts), include: { department: true }, orderBy: { title: "asc" } })
+      .findMany({ where: { ...wherePublished(includeDrafts), ...scopedDepartmentWhere("documents", scope) }, include: { department: true }, orderBy: { title: "asc" } })
       .then((rows) => rows.map(mapRowWithDepartment)),
 };
 
-async function getDatabaseEntity(entity: EntityName, includeDrafts: boolean): Promise<unknown[] | null> {
+async function getDatabaseEntity(entity: EntityName, includeDrafts: boolean, scope?: EntityScope): Promise<unknown[] | null> {
   const prisma = getPrisma();
   if (!prisma) throw new Error("DATABASE_URL is required for database content.");
-  return entityQueries[entity](prisma, includeDrafts);
+  return entityQueries[entity](prisma, includeDrafts, scope);
 }
 
 async function getDatabaseData(includeDrafts: boolean): Promise<SiteData> {
@@ -686,6 +736,19 @@ async function syncRelationships(entity: EntityName, id: string, payload: Record
   }
 }
 
+/**
+ * Entities whose Prisma model declares a `publishedAt` column.
+ *
+ * `Document`, `Link` and `Contact` carry the editorial status without a publish
+ * timestamp. Prisma rejects a write that sends `publishedAt` to those models,
+ * which surfaced as a failed PDF upload (documents) and failed link/contact
+ * edits, so the timestamp is written only for the models that declare it.
+ * `tests/entity-persistence.test.ts` compares this list with prisma/schema.prisma.
+ */
+export const entitiesWithPublishedAt: ReadonlySet<EntityName> = new Set<EntityName>([
+  "departments", "programs", "faculty", "laboratories", "researchAreas", "projects", "publications", "achievements", "events", "organizations", "pages", "notices",
+]);
+
 async function normalizeDatabasePayload(entity: EntityName, payload: Record<string, unknown>, id: string | undefined, actorId: string | undefined, client: TxClient) {
   const omit = new Set(["id", "createdAt", "updatedAt", "publishedAt", "departmentName", "departmentSlug", "status", "authorSlugs", "facultySlugs", "laboratorySlugs", "researchAreaSlugs", "departmentSlugs", "socialLinks"]);
   const data: Record<string, unknown> = {};
@@ -697,7 +760,7 @@ async function normalizeDatabasePayload(entity: EntityName, payload: Record<stri
   // prevents stale publishedAt values on unpublished records.
   if (payload.status !== undefined) {
     data.status = payload.status;
-    data.publishedAt = payload.status === "PUBLISHED" ? new Date() : null;
+    if (entitiesWithPublishedAt.has(entity)) data.publishedAt = payload.status === "PUBLISHED" ? new Date() : null;
   } else if (!id && entity !== "settings" && entity !== "media") {
     data.status = "DRAFT";
   }
@@ -715,7 +778,11 @@ async function normalizeDatabasePayload(entity: EntityName, payload: Record<stri
     else if (payload.endsAt === "") data.endsAt = null;
   }
   if (entity === "notices") {
-    data.noticeType = String(payload.noticeType || "TEXT").toUpperCase() === "PDF" ? "PDF" : "TEXT";
+    // Only normalise the type when the request actually carries one. Deriving it
+    // unconditionally defaulted every partial update to TEXT, so a workflow-only
+    // status change silently turned a PDF notice into an empty text notice (the
+    // document stayed attached). New records fall back to the model default.
+    if (payload.noticeType !== undefined) data.noticeType = String(payload.noticeType).toUpperCase() === "PDF" ? "PDF" : "TEXT";
     for (const key of ["noticeDate", "expiryDate"]) {
       if (payload[key] === "" || payload[key] === null) data[key] = key === "noticeDate" ? new Date() : null;
       else if (payload[key] !== undefined) data[key] = new Date(String(payload[key]));
@@ -809,4 +876,115 @@ export function slugify(input: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 80);
+}
+
+/* ------------------------------------------------------------------ */
+/* Department contact configuration                                    */
+/* ------------------------------------------------------------------ */
+
+export type DepartmentContactConfig = {
+  department: { id: string; slug: string; name: string };
+  /** Configured contacts, in display order, with their person's own details. */
+  contacts: { id: string; role: string; order: number; facultyId: string; facultySlug: string; facultyName: string; facultyDesignation: string }[];
+  /** Selectable people for this department only (never another department's staff). */
+  faculty: { id: string; slug: string; name: string; designation: string; status: string }[];
+};
+
+/**
+ * Reads exactly one department's contact configuration. Two scoped queries
+ * (department + that department's faculty) — never the whole faculty table,
+ * and never a list of the other departments.
+ */
+export async function getDepartmentContactConfig(departmentIdOrSlug: string): Promise<DepartmentContactConfig | null> {
+  assertDataStoreAvailable();
+  if (databaseConfigured) {
+    const prisma = getPrisma();
+    if (!prisma) throw new Error("DATABASE_URL is required in production.");
+    const department = await prisma.department.findFirst({
+      where: { OR: [{ id: departmentIdOrSlug }, { slug: departmentIdOrSlug }] },
+      select: { id: true, slug: true, name: true },
+    });
+    if (!department) return null;
+    const [contacts, faculty] = await Promise.all([
+      prisma.departmentContact.findMany({
+        where: { departmentId: department.id, faculty: { departmentId: department.id } },
+        include: { faculty: { select: { id: true, slug: true, name: true, designation: true } } },
+        orderBy: [{ order: "asc" }, { role: "asc" }],
+      }),
+      prisma.facultyMember.findMany({ where: { departmentId: department.id }, select: { id: true, slug: true, name: true, designation: true, status: true }, orderBy: { name: "asc" } }),
+    ]);
+    return {
+      department,
+      contacts: contacts.map((row) => ({ id: row.id, role: row.role, order: row.order, facultyId: row.facultyId, facultySlug: row.faculty.slug, facultyName: row.faculty.name, facultyDesignation: row.faculty.designation })),
+      faculty,
+    };
+  }
+
+  const store = readDemoStore();
+  const department = store.departments.find((item) => item.id === departmentIdOrSlug || item.slug === departmentIdOrSlug);
+  if (!department) return null;
+  const people = store.faculty.filter((person) => person.departmentSlug === department.slug);
+  const bySlug = new Map(people.map((person) => [person.slug, person]));
+  const contacts = mapDepartmentContacts((department.contacts || []).map((entry, index) => ({ id: entry.id || `deptcontact-${department.id}-${index}`, role: entry.role, order: entry.order ?? index, faculty: { slug: entry.facultySlug } })))
+    .map((entry) => {
+      const person = bySlug.get(entry.facultySlug);
+      return person ? { id: entry.id, role: entry.role, order: entry.order, facultyId: person.id, facultySlug: person.slug, facultyName: person.name, facultyDesignation: person.designation } : undefined;
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  return {
+    department: { id: department.id, slug: department.slug, name: department.name },
+    contacts,
+    faculty: people.map((person) => ({ id: person.id, slug: person.slug, name: person.name, designation: person.designation, status: person.status })),
+  };
+}
+
+/**
+ * Replaces one department's configured contacts atomically. The caller has
+ * already authorized the actor (see `canConfigureDepartmentContacts`); this
+ * function additionally guarantees that every selected person belongs to that
+ * same department, so a department's contact card can never point at another
+ * department's faculty.
+ */
+export async function replaceDepartmentContacts(
+  input: { departmentId: string; contacts: { role: string; facultySlug: string; order: number }[] },
+  actor: { id?: string; email: string; role: string; ipAddress?: string },
+): Promise<DepartmentContactConfig> {
+  assertDataStoreAvailable();
+  const stored = await getDepartmentContactConfig(input.departmentId);
+  if (!stored) throw new Error("Department not found");
+
+  if (databaseConfigured) {
+    const prisma = getPrisma();
+    if (!prisma) throw new Error("DATABASE_URL is required in production.");
+    const people = await prisma.facultyMember.findMany({ where: { departmentId: stored.department.id, slug: { in: input.contacts.map((contact) => contact.facultySlug) } }, select: { id: true, slug: true } });
+    const bySlug = new Map(people.map((person) => [person.slug, person.id]));
+    if (bySlug.size !== input.contacts.length) throw new Error("INVALID_INPUT: A selected person does not belong to this department.");
+    const before = stored.contacts;
+    await prisma.$transaction(async (tx) => {
+      await tx.departmentContact.deleteMany({ where: { departmentId: stored.department.id } });
+      if (input.contacts.length) {
+        await tx.departmentContact.createMany({
+          data: input.contacts.map((contact, index) => ({ departmentId: stored.department.id, facultyId: bySlug.get(contact.facultySlug) as string, role: contact.role, order: typeof contact.order === "number" ? contact.order : index })),
+        });
+      }
+      await appendAuditEntry(tx, { user: actor.email, userId: actor.id, role: actor.role, ipAddress: actor.ipAddress, action: "UPDATED", entity: "departmentContacts", entityId: stored.department.id, before, after: input.contacts });
+    });
+    const saved = await getDepartmentContactConfig(stored.department.id);
+    if (!saved) throw new Error("Department not found");
+    return saved;
+  }
+
+  const store = readDemoStore();
+  const department = store.departments.find((item) => item.id === stored.department.id);
+  if (!department) throw new Error("Department not found");
+  const people = store.faculty.filter((person) => person.departmentSlug === department.slug);
+  const bySlug = new Map(people.map((person) => [person.slug, person.id]));
+  if (input.contacts.some((contact) => !bySlug.has(contact.facultySlug))) throw new Error("INVALID_INPUT: A selected person does not belong to this department.");
+  const before = stored.contacts;
+  department.contacts = input.contacts.map((contact, index) => ({ id: `deptcontact-${department.id}-${index}`, role: contact.role, order: typeof contact.order === "number" ? contact.order : index, facultySlug: contact.facultySlug }));
+  writeDemoStore(store);
+  await appendAudit({ user: actor.email, userId: actor.id, role: actor.role, ipAddress: actor.ipAddress, action: "UPDATED", entity: "departmentContacts", entityId: department.id, before, after: input.contacts });
+  const saved = await getDepartmentContactConfig(department.id);
+  if (!saved) throw new Error("Department not found");
+  return saved;
 }

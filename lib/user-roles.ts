@@ -70,3 +70,44 @@ export async function resolveDepartmentAssignment(
   if (!(await departmentExists(assigned))) return { ok: false, error: DEPARTMENT_NOT_FOUND };
   return { ok: true, departmentId: assigned };
 }
+
+/**
+ * Roles an actor may offer when creating or editing an account. This is the
+ * same rule the users API applies (`permitted()` + the super-admin grant
+ * check), expressed once so the form cannot offer a role the API would reject.
+ */
+export function adminRolesFor(actor: { role: string } | null | undefined, currentRole?: string): AdminRole[] {
+  if (actor?.role === "SUPER_ADMIN") {
+    // A super administrator may keep (but not create) an account in any role.
+    return currentRole && isAdminRole(currentRole) && !adminRoles.includes(currentRole) ? [...adminRoles, currentRole] : [...adminRoles];
+  }
+  if (actor?.role === "IET_ADMIN") return adminRoles.filter((role) => role !== "SUPER_ADMIN");
+  return currentRole && isAdminRole(currentRole) ? [currentRole] : [];
+}
+
+/**
+ * Whether an actor may modify a target account at all (the API's `permitted()`):
+ * SUPER_ADMIN may manage every account; IET_ADMIN may not touch a
+ * SUPER_ADMIN account; no other role manages users.
+ */
+export function canActOnAccount(actor: { role: string } | null | undefined, target: { role: string }): boolean {
+  if (actor?.role === "SUPER_ADMIN") return true;
+  return actor?.role === "IET_ADMIN" && target.role !== "SUPER_ADMIN";
+}
+
+/**
+ * Whether the signed-in actor may deactivate (or reactivate) a target account:
+ * an actor never changes its own status, and the target must be one the actor
+ * is allowed to modify at all.
+ */
+export function canDeactivateAccount(actor: { id: string; role: string } | null | undefined, target: { id: string; role: string }): boolean {
+  if (!actor || actor.id === target.id) return false;
+  return canActOnAccount(actor, target);
+}
+
+/** Whether the actor may grant the given role (mirrors the API's grant rule). */
+export function canGrantRole(actor: { role: string } | null | undefined, role: string): boolean {
+  if (!isAdminRole(role)) return false;
+  if (actor?.role === "SUPER_ADMIN") return true;
+  return actor?.role === "IET_ADMIN" && role !== "SUPER_ADMIN";
+}

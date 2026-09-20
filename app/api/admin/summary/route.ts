@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { databaseConfigured } from "@/lib/db";
+import { getPrisma } from "@/lib/db";
 import { getDashboardSummary } from "@/lib/store";
+
+async function assignedDepartmentSlug(departmentId: string): Promise<string | undefined> {
+  const prisma = getPrisma();
+  if (!prisma) return undefined;
+  const department = await prisma.department.findUnique({ where: { id: departmentId }, select: { slug: true } });
+  return department?.slug;
+}
 
 /**
  * Administrator dashboard counters.
@@ -17,8 +25,14 @@ import { getDashboardSummary } from "@/lib/store";
  */
 export async function GET() {
   try {
-    await requireAdmin();
-    const summary = await getDashboardSummary();
+    const user = await requireAdmin();
+    // Department administrators see their own department's counters: the scope
+    // is resolved from the authenticated session (never from the request), and
+    // is applied inside the aggregate queries.
+    const scope = user.role === "DEPARTMENT_ADMIN" && user.departmentId
+      ? { departmentSlug: (await assignedDepartmentSlug(user.departmentId)) }
+      : undefined;
+    const summary = await getDashboardSummary(scope);
     const health = [
       { label: "Database connection", detail: databaseConfigured ? "DATABASE_URL configured; Prisma adapter active." : "No DATABASE_URL; review seed store is active for preview.", ok: databaseConfigured },
       { label: "Public publishing", detail: `${summary.publishedDepartments} departments are currently published.`, ok: summary.hasPublishedDepartment },
