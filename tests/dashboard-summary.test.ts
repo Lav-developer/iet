@@ -1,0 +1,70 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { getDashboardSummary } from "../lib/store";
+
+// The dashboard used to be the only admin read that loaded the whole dataset
+// (every entity, drafts included, with relations) in one request. It now reads
+// bounded status aggregates, one entity at a time, and reports failures the
+// same way the other admin routes do. These tests cover the counters and the
+// request/error-handling contract.
+
+test("the dashboard counters cover the four headline entities, in order", async () => {
+  const summary = await getDashboardSummary();
+  assert.deepEqual(summary.stats.map((stat) => stat.label), ["Departments", "Programs", "Faculty & staff", "Laboratories"]);
+  for (const stat of summary.stats) {
+    assert.equal(stat.total, stat.published + stat.drafts, `${stat.label}: total is published + draft/review`);
+    assert.ok(stat.total >= 0 && stat.published >= 0 && stat.drafts >= 0);
+  }
+});
+
+test("the demo store path counts every record, drafts included (preview behaviour unchanged)", async () => {
+  const summary = await getDashboardSummary();
+  assert.equal(summary.mode, "demo");
+  const departments = summary.stats[0];
+  assert.ok(departments.total > 0, "the seed store has departments");
+  assert.equal(summary.publishedDepartments, departments.published);
+  assert.equal(summary.hasPublishedDepartment, departments.published > 0);
+  // The department count is the number of seeded departments (published plus
+  // any draft placeholder), never a filtered subset of one status only.
+  assert.equal(departments.published, departments.total - departments.drafts);
+});
+
+test("the summary route keeps the admin authentication gate and the shared error pattern", () => {
+  const route = readFileSync("app/api/admin/summary/route.ts", "utf8");
+  // Authorization is unchanged: the same helper every admin route uses.
+  assert.match(route, /import \{ requireAdmin \} from "@\/lib\/auth"/);
+  assert.match(route, /await requireAdmin\(\)/);
+  assert.doesNotMatch(route, /public|cookies\(\)|getSession\(\)/, "the dashboard must not add its own session handling");
+  // Only a genuine authentication failure is reported as 401 / unauthorized.
+  assert.match(route, /error\.message === "UNAUTHORIZED"[\s\S]*?status: 401/);
+  // Every other failure is logged with its real cause (the previous version
+  // reported a generic message and logged nothing at all).
+  assert.match(route, /console\.error\("Unable to load dashboard\.", error\)/);
+});
+
+test("the summary route no longer loads the whole dataset for the dashboard", () => {
+  const route = readFileSync("app/api/admin/summary/route.ts", "utf8");
+  assert.match(route, /import \{ getDashboardSummary \} from "@\/lib\/store"/);
+  assert.doesNotMatch(route, /getSiteData/, "the whole-dataset loader is not a dashboard read");
+  assert.doesNotMatch(route, /Promise\.all/, "no parallel fan-out across every entity");
+  const store = readFileSync("lib/store.ts", "utf8");
+  // Aggregates only: no rows and no relations are loaded for the dashboard.
+  assert.match(store, /export async function getDashboardSummary\(\): Promise<DashboardSummary>/);
+  assert.match(store, /groupBy\(\{ by: \["status"\], _count: \{ _all: true \} \}\)/);
+  const summaryBody = store.slice(store.indexOf("export async function getDashboardSummary"), store.indexOf("export async function getEntity"));
+  assert.doesNotMatch(summaryBody, /findMany|include:/, "counters never materialise records or relations");
+});
+
+test("the dashboard only offers the sign-in link when the session really failed", () => {
+  const page = readFileSync("app/admin/(app)/page.tsx", "utf8");
+  assert.match(page, /auth: response\.status === 401/);
+  // The sign-in link is rendered from the auth flag only.
+  assert.match(page, /\{error\.auth && <> <Link href="\/admin\/login">Sign in to continue\.<\/Link><\/>\}/);
+  const link = page.slice(page.indexOf("Sign in to continue"));
+  assert.doesNotMatch(link.slice(0, 200), /^\}: Sign in to continue\./, "the link is not appended to every error");
+  // Dashboard content is unchanged.
+  for (const marker of ["Content health at a glance.", "Quick actions", "Platform handover", "admin-stat"]) {
+    assert.ok(page.includes(marker), `dashboard still renders ${marker}`);
+  }
+});

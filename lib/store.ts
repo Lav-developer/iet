@@ -138,6 +138,72 @@ export async function getSiteData(options?: { includeDrafts?: boolean }): Promis
   return data;
 }
 
+/**
+ * Counters for the administrator dashboard.
+ *
+ * The dashboard only ever displays totals, so it reads status aggregates —
+ * four bounded queries, one at a time, without loading rows or relations —
+ * instead of the whole dataset. This is the same per-entity read pattern the
+ * other admin screens use (see `entityQueries`), so a dashboard request never
+ * fans out across every entity at once.
+ */
+export type DashboardStat = { label: string; total: number; published: number; drafts: number };
+export type DashboardSummary = {
+  mode: "database" | "demo";
+  stats: DashboardStat[];
+  publishedDepartments: number;
+  hasPublishedDepartment: boolean;
+};
+
+const dashboardEntities: { label: string; entity: "departments" | "programs" | "faculty" | "laboratories" }[] = [
+  { label: "Departments", entity: "departments" },
+  { label: "Programs", entity: "programs" },
+  { label: "Faculty & staff", entity: "faculty" },
+  { label: "Laboratories", entity: "laboratories" },
+];
+
+function summarizeStatusCounts(rows: { status: string; _count: { _all: number } }[]) {
+  const total = rows.reduce((sum, row) => sum + row._count._all, 0);
+  const published = rows.filter((row) => row.status === "PUBLISHED").reduce((sum, row) => sum + row._count._all, 0);
+  return { total, published };
+}
+
+function statFromRows(label: string, rows: { status?: string }[]): DashboardStat {
+  const published = rows.filter((item) => item.status === "PUBLISHED").length;
+  return { label, total: rows.length, published, drafts: rows.length - published };
+}
+
+export async function getDashboardSummary(): Promise<DashboardSummary> {
+  assertDataStoreAvailable();
+  if (!databaseConfigured) {
+    // Preview/dev file store: counted from the same records the dashboard
+    // view has always shown (drafts included).
+    const data = readDemoStore();
+    const stats = dashboardEntities.map(({ label, entity }) => statFromRows(label, (data[entity] as { status?: string }[]) || []));
+    return { mode: "demo", stats, publishedDepartments: stats[0].published, hasPublishedDepartment: stats[0].published > 0 };
+  }
+
+  const prisma = getPrisma();
+  if (!prisma) throw new Error("DATABASE_URL is required for database content.");
+
+  // Sequential on purpose: one aggregate query at a time, so a dashboard
+  // request never opens a connection per entity simultaneously.
+  const departments = await prisma.department.groupBy({ by: ["status"], _count: { _all: true } });
+  const programs = await prisma.program.groupBy({ by: ["status"], _count: { _all: true } });
+  const faculty = await prisma.facultyMember.groupBy({ by: ["status"], _count: { _all: true } });
+  const laboratories = await prisma.laboratory.groupBy({ by: ["status"], _count: { _all: true } });
+  const totals = [summarizeStatusCounts(departments), summarizeStatusCounts(programs), summarizeStatusCounts(faculty), summarizeStatusCounts(laboratories)];
+
+  const stats = dashboardEntities.map(({ label }, index) => ({
+    label,
+    total: totals[index].total,
+    published: totals[index].published,
+    drafts: totals[index].total - totals[index].published,
+  }));
+  const departmentTotals = totals[0];
+  return { mode: "database", stats, publishedDepartments: departmentTotals.published, hasPublishedDepartment: departmentTotals.published > 0 };
+}
+
 export async function getEntity(entity: EntityName, includeDrafts = true): Promise<unknown[]> {
   assertDataStoreAvailable();
   if (databaseConfigured) return (await getDatabaseEntity(entity, includeDrafts)) || [];
