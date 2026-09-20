@@ -47,6 +47,33 @@ async function layout(page, label) {
   assert.deepEqual(result.overflow, [], `${label}: overflowing cards`);
 }
 
+// A published profile must keep its information hierarchy: no CMS language,
+// no empty optional sections, and academic details rendered when available.
+async function structure(page, route, label, { requireAcademic = false, requireDepartment = false } = {}) {
+  const result = await page.evaluate(() => {
+    const sections = [...document.querySelectorAll('.faculty-profile-layout .detail-section')];
+    return {
+      text: document.body.innerText,
+      cms: /Edit in CMS|Verified source record|Content provenance|Confirm before official public launch|Administrators can|source marker|record status/i.test(document.body.innerText),
+      adminLinks: document.querySelectorAll('a[href^="/admin"]').length,
+      identityNames: document.querySelectorAll('.faculty-identity h2').length,
+      emptySections: sections.filter(section => !section.querySelector('p, li, dd, a, article') || !section.innerText.replace(section.querySelector('h2')?.innerText || '', '').trim()).map(section => section.id),
+      academic: [...document.querySelectorAll('#academic-details dd')].map(el => el.innerText.trim()).filter(Boolean),
+      backLink: Boolean(document.querySelector('.faculty-back-link[href="/faculty"]')),
+      hasSidebar: Boolean(document.querySelector('.faculty-profile-layout > .info-aside')),
+    };
+  });
+  assert.equal(result.identityNames, 1, `${label}: one profile identity heading`);
+  assert.deepEqual(result.emptySections, [], `${label}: empty sections rendered`);
+  assert.equal(result.cms, false, `${label}: internal/CMS language present`);
+  assert.equal(result.adminLinks, 0, `${label}: admin links present`);
+  assert.equal(result.backLink, true, `${label}: back to faculty link`);
+  assert.ok(result.text.trim().length > 120, `${label}: profile is not sparse`);
+  if (requireAcademic) assert.ok(result.academic.length >= 2, `${label}: published academic details rendered`);
+  if (requireDepartment) assert.ok(result.text.includes('Department of'), `${label}: department name rendered`);
+  return result;
+}
+
 try {
   for (const width of [1440, 768, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
@@ -66,6 +93,7 @@ try {
           assert.equal(await page.locator('a.dept-card').first().evaluate(el => getComputedStyle(el).textDecorationLine), 'none');
         }
         if (route.includes('/faculty/')) {
+          await structure(page, route, label, { requireAcademic: true, requireDepartment: true });
           const sidebar = await page.locator('.faculty-profile-layout > .info-aside').boundingBox();
           assert.ok(sidebar.width >= 288, `${label}: sensible sidebar width`);
           if (width === 768) {
@@ -110,6 +138,15 @@ try {
         await withinViewport(page.getByRole('navigation', { name: 'Primary navigation', exact: true }), 'desktop navigation');
       }
     }
+    // Other profile shapes: leadership with interests and no department, and laboratory staff.
+    for (const [route, expected] of [['/faculty/chandra-kumar-dixit', 'Research interests'], ['/faculty/aman-kumar-yadav', 'Role type']]) {
+      const response = await page.goto(base + route, { waitUntil: 'networkidle' });
+      assert.equal(response.status(), 200, route);
+      await layout(page, `${width}px ${route}`);
+      const result = await structure(page, route, `${width}px ${route}`, { requireAcademic: true, requireDepartment: route !== '/faculty/chandra-kumar-dixit' });
+      assert.ok(result.text.toLowerCase().includes(expected.toLowerCase()), `${width}px ${route}: missing ${expected}`);
+    }
+
     // Small-height / landscape view: controls scroll inside the panel, not offscreen.
     await page.setViewportSize({ width, height: 360 });
     await page.getByRole('button', { name: 'Open accessibility preferences', exact: true }).click();
@@ -120,5 +157,5 @@ try {
     await context.close();
   }
   assert.deepEqual(errors, [], 'browser errors');
-  console.log(`PASS: ${checks} route/viewport/text-scale checks; scrolled and short-viewport panels; navigation; accessibility controls and focus.`);
+  console.log(`PASS: ${checks} route/viewport/text-scale checks; faculty profile structure on 5 profiles; scrolled and short-viewport panels; navigation; accessibility controls and focus.`);
 } finally { await browser.close(); }
