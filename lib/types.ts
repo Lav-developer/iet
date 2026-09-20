@@ -1,5 +1,30 @@
 export type ContentStatus = "DRAFT" | "REVIEW" | "PUBLISHED" | "ARCHIVED";
 
+export const socialPlatforms = ["INSTAGRAM", "FACEBOOK", "LINKEDIN", "X", "YOUTUBE", "WEBSITE", "OTHER"] as const;
+export type SocialPlatform = (typeof socialPlatforms)[number];
+
+/** Structured department-owned channel: a validated URL, never raw HTML. */
+export type DepartmentSocialLink = {
+  id?: string;
+  platform: SocialPlatform | string;
+  url: string;
+  label?: string | null;
+  order?: number;
+};
+
+/**
+ * A department's explicitly configured contact/responsibility entry. The role
+ * label is editorial (Coordinator, Department In-Charge, Head of Department,
+ * Programme Coordinator, …) and the person is referenced by slug, so the public
+ * card always renders that person's own details.
+ */
+export type DepartmentContact = {
+  id?: string;
+  role: string;
+  order?: number;
+  facultySlug: string;
+};
+
 export type Department = {
   id: string;
   slug: string;
@@ -8,6 +33,9 @@ export type Department = {
   overview: string;
   established?: string;
   sourceNote?: string;
+  socialLinks?: DepartmentSocialLink[];
+  /** Explicitly configured contacts, in display order. */
+  contacts?: DepartmentContact[];
   status: ContentStatus;
 };
 
@@ -34,6 +62,11 @@ export type FacultyMember = {
   slug: string;
   name: string;
   designation: string;
+  profileImageId?: string | null;
+  profileImage?: { url: string; altText: string };
+  cvUrl?: string | null;
+  cvDocumentId?: string | null;
+  cv?: { url: string; external: boolean };
   email?: string;
   phone?: string;
   qualification?: string;
@@ -122,6 +155,7 @@ export type EventItem = {
   endsAt?: string | Date | null;
   location?: string;
   registrationUrl?: string;
+  organizationId?: string | null;
   departmentSlug?: string;
   departmentName?: string;
   status: ContentStatus;
@@ -135,6 +169,29 @@ export type StudentOrganization = {
   contactUrl?: string;
   departmentSlug?: string;
   status: ContentStatus;
+};
+
+export const noticeTypes = ["TEXT", "PDF"] as const;
+export type NoticeType = (typeof noticeTypes)[number];
+
+export type Notice = {
+  id: string;
+  slug: string;
+  title: string;
+  summary?: string;
+  /** Text notices render this body; PDF notices may omit it. */
+  body?: string;
+  noticeType: NoticeType | string;
+  documentId?: string | null;
+  /** Resolved only for published PDF documents; never a raw storage path. */
+  pdf?: { url: string; title: string };
+  noticeDate: string | Date;
+  expiryDate?: string | Date | null;
+  category?: string;
+  departmentSlug?: string;
+  departmentName?: string;
+  status: ContentStatus;
+  publishedAt?: string | Date | null;
 };
 
 export type PageRecord = {
@@ -224,6 +281,7 @@ export type EntityName =
   | "achievements"
   | "events"
   | "organizations"
+  | "notices"
   | "pages"
   | "links"
   | "contacts"
@@ -241,6 +299,7 @@ export type SiteData = {
   publications: Publication[];
   achievements: Achievement[];
   events: EventItem[];
+  notices: Notice[];
   organizations: StudentOrganization[];
   pages: PageRecord[];
   links: LinkRecord[];

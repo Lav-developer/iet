@@ -1,6 +1,56 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { databaseConfigured } from "@/lib/db";
-import { getSiteData } from "@/lib/store";
+import { getPrisma } from "@/lib/db";
+import { getDashboardSummary } from "@/lib/store";
 
-export async function GET() { try { await requireAdmin(); const data = await getSiteData({ includeDrafts: true }); const entities: [string, { status?: string }[]][] = [["Departments", data.departments], ["Programs", data.programs], ["Faculty & staff", data.faculty], ["Laboratories", data.laboratories], ["Research areas", data.researchAreas], ["Projects", data.projects], ["Publications", data.publications], ["Events", data.events], ["Achievements", data.achievements]]; const stats = entities.slice(0, 4).map(([label, items]) => ({ label, total: items.length, published: items.filter((item) => item.status === "PUBLISHED").length, drafts: items.filter((item) => item.status !== "PUBLISHED").length })); const health = [{ label: "Database connection", detail: databaseConfigured ? "DATABASE_URL configured; Prisma adapter active." : "No DATABASE_URL; review seed store is active for preview.", ok: databaseConfigured }, { label: "Public publishing", detail: `${data.departments.filter((item) => item.status === "PUBLISHED").length} departments are currently published.`, ok: data.departments.some((item) => item.status === "PUBLISHED") }, { label: "Workflow coverage", detail: "Every editorial entity carries a status field.", ok: true }, { label: "Institutional handover", detail: "Environment variables, schema and migration docs are present.", ok: true }]; return NextResponse.json({ mode: databaseConfigured ? "database" : "demo", stats, health }); } catch (error) { const message = error instanceof Error && error.message === "UNAUTHORIZED" ? "Unauthorized" : "Unable to load dashboard."; return NextResponse.json({ error: message }, { status: message === "Unauthorized" ? 401 : 500 }); } }
+async function assignedDepartmentSlug(departmentId: string): Promise<string | undefined> {
+  const prisma = getPrisma();
+  if (!prisma) return undefined;
+  const department = await prisma.department.findUnique({ where: { id: departmentId }, select: { slug: true } });
+  return department?.slug;
+}
+
+/**
+ * Administrator dashboard counters.
+ *
+ * Authentication is the same call every other admin route makes
+ * (`requireAdmin` -> `getSession`), and the error handling follows the same
+ * pattern as well (`/api/admin/content`'s `handleError`): only a genuine
+ * authentication failure answers 401, everything else is logged with its real
+ * cause and reported as a server error. The dashboard view used to load the
+ * entire dataset (every entity, drafts included, with relations) on every
+ * request, which is the one admin read that did not follow the per-entity
+ * scoped pattern used elsewhere — it now reads status aggregates only.
+ */
+export async function GET() {
+  try {
+    const user = await requireAdmin();
+    // Department administrators see their own department's counters: the scope
+    // is resolved from the authenticated session (never from the request), and
+    // is applied inside the aggregate queries.
+    const scope = user.role === "DEPARTMENT_ADMIN" && user.departmentId
+      ? { departmentSlug: (await assignedDepartmentSlug(user.departmentId)) }
+      : undefined;
+    const summary = await getDashboardSummary(scope);
+    const health = [
+      { label: "Database connection", detail: databaseConfigured ? "DATABASE_URL configured; Prisma adapter active." : "No DATABASE_URL; review seed store is active for preview.", ok: databaseConfigured },
+      { label: "Public publishing", detail: `${summary.publishedDepartments} departments are currently published.`, ok: summary.hasPublishedDepartment },
+      { label: "Workflow coverage", detail: "Every editorial entity carries a status field.", ok: true },
+      { label: "Institutional handover", detail: "Environment variables, schema and migration docs are present.", ok: true },
+    ];
+    return NextResponse.json({ mode: summary.mode, stats: summary.stats, health });
+  } catch (error) {
+    if (error instanceof Error && error.message === "UNAUTHORIZED") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    // Log the underlying cause: without this the runtime logs only showed a
+    // generic 500 and the real failure was invisible.
+    console.error("Unable to load dashboard.", error);
+    const fallback = "Unable to load dashboard.";
+    return NextResponse.json(
+      { error: process.env.NODE_ENV === "production" ? fallback : (error instanceof Error ? error.message : fallback) },
+      { status: 500 },
+    );
+  }
+}

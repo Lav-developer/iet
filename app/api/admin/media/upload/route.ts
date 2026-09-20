@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getPrisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
 import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
-import { deleteObject, objectUrl, putObject, randomObjectKey, validateMagicBytes, validateUpload } from "@/lib/storage";
+import { deleteObject, describeStorageError, objectUrl, putObject, randomObjectKey, validateMagicBytes, validateUpload } from "@/lib/storage";
 import { upsertEntity } from "@/lib/store";
 
 export const runtime = "nodejs";
@@ -61,7 +61,12 @@ export async function POST(request: Request) {
     }
   } catch (error) {
     if (error instanceof Error && error.message === "UNAUTHORIZED") return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // The real cause is always logged; the response carries a safe, actionable
+    // message instead of a bare "Upload failed." (the message a rejected
+    // storage request used to produce).
     console.error("Upload failed", error);
-    return NextResponse.json({ error: process.env.NODE_ENV === "production" ? "Upload failed." : (error instanceof Error ? error.message : "Upload failed.") }, { status: 500 });
+    if (error instanceof Error && error.message.startsWith("INVALID_INPUT")) return NextResponse.json({ error: error.message.replace("INVALID_INPUT: ", "") }, { status: 400 });
+    const described = describeStorageError(error);
+    return NextResponse.json({ error: described.message }, { status: described.status });
   }
 }

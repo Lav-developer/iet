@@ -52,17 +52,50 @@ export function objectUrl(key: string) {
   return `/api/media/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/**
+ * Server-side encryption is opt-in.
+ *
+ * AWS S3 accepts the `x-amz-server-side-encryption` header, but S3-compatible
+ * services do not all implement it — Cloudflare R2, for example, lists SSE as
+ * not implemented for PutObject, and the request is rejected when the header is
+ * sent. R2 encrypts every object at rest regardless, so the default is to leave
+ * object-level SSE to the storage provider and to send the header only when an
+ * operator explicitly configures `STORAGE_SERVER_SIDE_ENCRYPTION=AES256` (or
+ * `aws:kms`) for a store that requires it.
+ */
+function serverSideEncryption(): "AES256" | "aws:kms" | undefined {
+  const configured = process.env.STORAGE_SERVER_SIDE_ENCRYPTION?.trim();
+  return configured === "AES256" || configured === "aws:kms" ? configured : undefined;
+}
+
+/**
+ * Maps a storage failure to a safe, actionable message. Provider errors are
+ * logged by the caller; the message never includes credentials, endpoints or
+ * stack traces.
+ */
+export function describeStorageError(error: unknown): { status: number; message: string } {
+  const name = typeof error === "object" && error !== null && "name" in error ? String(error.name) : "";
+  if (["NoSuchBucket", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied", "InvalidRequest", "IncompleteBody"].includes(name)) {
+    return { status: 503, message: "Object storage rejected the upload. Check STORAGE_ENDPOINT, STORAGE_BUCKET, STORAGE_REGION, STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY." };
+  }
+  if (error instanceof Error && error.message === "Object storage configuration is incomplete.") {
+    return { status: 503, message: "Object storage is only partially configured. Set all of STORAGE_ENDPOINT, STORAGE_BUCKET, STORAGE_ACCESS_KEY and STORAGE_SECRET_KEY." };
+  }
+  return { status: 502, message: "The upload service is temporarily unavailable. Please try again in a moment." };
+}
+
 export async function putObject(input: { key: string; body: Buffer; contentType: string }) {
   const key = safeKey(input.key);
   const configured = storageConfig();
   if (configured) {
+    const encryption = serverSideEncryption();
     await configured.client.send(new PutObjectCommand({
       Bucket: configured.bucket,
       Key: key,
       Body: input.body,
       ContentType: input.contentType,
       CacheControl: "public, max-age=31536000, immutable",
-      ServerSideEncryption: "AES256",
+      ...(encryption ? { ServerSideEncryption: encryption } : {}),
     }));
   } else {
     if (isProduction) throw new Error("Object storage is required in production.");

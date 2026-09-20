@@ -447,6 +447,22 @@ async function importContent(tx: TransactionClient): Promise<void> {
     }),
     (id, createData, updateData) => tx.facultyMember.upsert({ where: { id }, create: createData, update: updateData }));
 
+  // Configured department contacts: curated editorial decisions, upserted on
+  // the (department, faculty) unique key so re-running converges without
+  // duplicates and without deleting anything an operator added later.
+  const contactFacultyIds = new Map(seedData.faculty.map((item) => [item.slug, item.id]));
+  for (const department of seedData.departments) {
+    for (const contact of department.contacts || []) {
+      const facultyId = contactFacultyIds.get(contact.facultySlug);
+      if (!facultyId) throw new Error(`Curated department ${department.slug} references unknown faculty slug "${contact.facultySlug}".`);
+      await tx.departmentContact.upsert({
+        where: { departmentId_facultyId: { departmentId: department.id, facultyId } },
+        update: { role: contact.role, order: contact.order ?? 0 },
+        create: { departmentId: department.id, facultyId, role: contact.role, order: contact.order ?? 0 },
+      });
+    }
+  }
+
   await syncEntity("laboratories", seedData.laboratories, byIdMap(laboratoryRows, laboratoryIds),
     (item, existing): Prisma.LaboratoryUncheckedCreateInput => ({
       slug: item.slug,

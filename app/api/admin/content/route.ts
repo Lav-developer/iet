@@ -1,3 +1,4 @@
+import { validateAssetRelations } from "@/lib/faculty-relations";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdmin, type SessionUser } from "@/lib/auth";
@@ -7,7 +8,8 @@ import { canAccess, departmentScoped, entitySchema, sanitize, validatePayload, w
 import { deleteEntity, getEntity, getEntityLabel, getSingleEntityRecord, upsertEntity } from "@/lib/store";
 import type { EntityName } from "@/lib/types";
 
-async function getAssignedDepartmentSlug(departmentId: string) {
+async function getAssignedDepartmentSlug(departmentId: string | null | undefined) {
+  if (!departmentId) return undefined;
   const prisma = getPrisma();
   if (!prisma) return undefined;
   const department = await prisma.department.findUnique({ where: { id: departmentId }, select: { slug: true } });
@@ -36,11 +38,10 @@ export async function GET(request: Request) {
     const entity = entitySchema.parse(new URL(request.url).searchParams.get("entity"));
     const { page, limit } = pageLimitSchema.parse(Object.fromEntries(new URL(request.url).searchParams));
     if (user.role === "DEPARTMENT_ADMIN" && !departmentScoped.has(entity)) return NextResponse.json({ error: "Your role is scoped to department content." }, { status: 403 });
-    let records = await getEntity(entity, true);
-    if (user.role === "DEPARTMENT_ADMIN") {
-      const departmentSlug = user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
-      records = departmentSlug ? records.filter((record) => (record as { departmentSlug?: string }).departmentSlug === departmentSlug) : [];
-    }
+    // A department administrator's list is filtered in the database query
+    // itself (see `scopedDepartmentWhere`): another department's rows are never
+    // loaded into this process, let alone sent to the browser.
+    const records = await getEntity(entity, true, user.role === "DEPARTMENT_ADMIN" ? { departmentSlug: await getAssignedDepartmentSlug(user.departmentId) } : undefined);
     const total = records.length;
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const paged = records.slice((page - 1) * limit, page * limit);
@@ -59,9 +60,10 @@ export async function POST(request: Request) {
     const body = await request.json() as { entity?: string; data?: Record<string, unknown> };
     const entity = entitySchema.parse(body.entity);
     const data = sanitize(entity, body.data || {});
-    validatePayload(entity, data);
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
     if (!canAccess(user, entity, "write", data, undefined, assignedDepartmentSlug) || !workflowTransitionAllowed(user, undefined, data.status) || !(await departmentRelationsAllowed(user, entity, data))) return NextResponse.json({ error: "Your role cannot create this record, use that workflow transition, or its relationships are outside the assigned department." }, { status: 403 });
+    validatePayload(entity, data);
+    await validateAssetRelations(user, entity, data, getSingleEntityRecord, assignedDepartmentSlug);
     const record = await upsertEntity(entity, data, user.email, undefined, user.id, user.role, requestIp(request));
     return NextResponse.json({ record }, { status: 201 });
   } catch (error) {
@@ -82,9 +84,14 @@ export async function PATCH(request: Request) {
     const current = (await getSingleEntityRecord(entity, body.id)) as Record<string, unknown> | undefined;
     if (!current) return NextResponse.json({ error: "Record not found" }, { status: 404 });
     const data = sanitize(entity, body.data || {});
-    validatePayload(entity, data);
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
     if (!canAccess(user, entity, "write", data, current, assignedDepartmentSlug) || !workflowTransitionAllowed(user, current, data.status) || !(await departmentRelationsAllowed(user, entity, data))) return NextResponse.json({ error: "Your role cannot update this record, use that workflow transition, or its relationships are outside the assigned department." }, { status: 403 });
+    // Validate the record as it will exist after the update. Validating the
+    // incoming fragment alone rejected every workflow-only status change on a
+    // notice ("A text notice requires a notice body.") because the rest of the
+    // record was not part of the request.
+    validatePayload(entity, { ...current, ...data });
+    await validateAssetRelations(user, entity, data, getSingleEntityRecord, assignedDepartmentSlug, current);
     const record = await upsertEntity(entity, data, user.email, body.id, user.id, user.role, requestIp(request));
     return NextResponse.json({ record });
   } catch (error) {

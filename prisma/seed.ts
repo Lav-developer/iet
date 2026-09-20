@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
 import { seedData } from "../data/seed";
+import { MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH, meetsPasswordPolicy } from "../lib/password-policy";
 
 const prisma = new PrismaClient();
 
@@ -10,8 +11,8 @@ async function main() {
   }
   const adminEmail = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
   const adminPassword = process.env.SEED_ADMIN_PASSWORD;
-  if (!adminEmail || !adminPassword || adminPassword.length < 12) {
-    throw new Error("Set SEED_ADMIN_EMAIL and a SEED_ADMIN_PASSWORD of at least 12 characters for local seeding.");
+  if (!adminEmail || !meetsPasswordPolicy(adminPassword)) {
+    throw new Error(`Set SEED_ADMIN_EMAIL and a SEED_ADMIN_PASSWORD with ${MIN_PASSWORD_LENGTH}-${MAX_PASSWORD_LENGTH} characters for local seeding.`);
   }
   const adminHash = await bcrypt.hash(adminPassword, 12);
   await prisma.user.upsert({ where: { email: adminEmail }, update: { name: "IET Administrator", passwordHash: adminHash, role: "IET_ADMIN", active: true }, create: { email: adminEmail, name: "IET Administrator", passwordHash: adminHash, role: "IET_ADMIN" } });
@@ -25,6 +26,22 @@ async function main() {
   }
   for (const item of seedData.faculty) {
     await prisma.facultyMember.upsert({ where: { id: item.id }, update: { slug: item.slug, name: item.name, designation: item.designation, email: item.email, phone: item.phone, qualification: item.qualification, profile: item.profile, researchInterests: item.researchInterests?.join("\n"), departmentId: item.departmentSlug ? departmentId.get(item.departmentSlug) : undefined, type: item.type, status: item.status as any, publishedAt: item.status === "PUBLISHED" ? new Date() : null }, create: { id: item.id, slug: item.slug, name: item.name, designation: item.designation, email: item.email, phone: item.phone, qualification: item.qualification, profile: item.profile, researchInterests: item.researchInterests?.join("\n"), departmentId: item.departmentSlug ? departmentId.get(item.departmentSlug) : undefined, type: item.type, status: item.status as any, publishedAt: item.status === "PUBLISHED" ? new Date() : null } });
+  }
+  // Department contacts are an explicit editorial configuration (never a
+  // position in the faculty list): the curated seed declares, per department,
+  // which person holds which responsibility. Upserted on the unique
+  // (department, faculty) key so re-seeding converges without duplicates.
+  const facultyIdBySlug = new Map(seedData.faculty.map((item) => [item.slug, item.id]));
+  for (const department of seedData.departments) {
+    for (const contact of department.contacts || []) {
+      const facultyId = facultyIdBySlug.get(contact.facultySlug);
+      if (!facultyId) throw new Error(`Unknown faculty slug "${contact.facultySlug}" in department ${department.slug}.`);
+      await prisma.departmentContact.upsert({
+        where: { departmentId_facultyId: { departmentId: department.id, facultyId } },
+        update: { role: contact.role, order: contact.order ?? 0 },
+        create: { departmentId: department.id, facultyId, role: contact.role, order: contact.order ?? 0 },
+      });
+    }
   }
   for (const item of seedData.laboratories) {
     await prisma.laboratory.upsert({ where: { id: item.id }, update: { slug: item.slug, name: item.name, description: item.description, equipment: item.equipment, courses: item.courses, researchRelevance: item.researchRelevance, departmentId: item.departmentSlug ? departmentId.get(item.departmentSlug) : undefined, status: item.status as any, publishedAt: item.status === "PUBLISHED" ? new Date() : null }, create: { id: item.id, slug: item.slug, name: item.name, description: item.description, equipment: item.equipment, courses: item.courses, researchRelevance: item.researchRelevance, departmentId: item.departmentSlug ? departmentId.get(item.departmentSlug) : undefined, status: item.status as any, publishedAt: item.status === "PUBLISHED" ? new Date() : null } });

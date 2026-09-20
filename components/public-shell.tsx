@@ -9,10 +9,11 @@ import { AccessibilityWidget } from "@/components/accessibility";
 const navItems = [
   { href: "/about", label: "About" },
   { href: "/departments", label: "Departments" },
-  { href: "/programs", label: "Programs" },
+  { href: "/programs", label: "Programmes" },
   { href: "/people", label: "People" },
   { href: "/research", label: "Research" },
   { href: "/campus", label: "Campus" },
+  { href: "/notices", label: "Notices" },
 ];
 
 export function PublicShell({ children }: { children: React.ReactNode }) {
@@ -28,7 +29,7 @@ function SiteHeader() {
     <>
       <a href="#main-content" className="skip-link">Skip to main content</a>
       <div className="utility-bar">
-        <div className="utility-inner"><span>DSMNRU · Lucknow · Uttar Pradesh</span><span>Institutional information platform · review-ready build</span></div>
+        <div className="utility-inner"><span>DSMNRU · Lucknow · Uttar Pradesh</span><span>Institute of Engineering & Technology</span></div>
       </div>
       <header className="site-header">
         <div className="site-header-inner">
@@ -43,10 +44,10 @@ function SiteHeader() {
           <div className="header-actions">
             <Link href="/search" className="icon-button" aria-label="Search the IET site" title="Search"><Search size={18} /></Link>
             <AccessibilityWidget />
-            <button className="menu-button" aria-label="Toggle navigation" aria-expanded={open} onClick={() => setOpen((value) => !value)}><Menu size={19} /></button>
+            <button className="menu-button" aria-label="Toggle navigation" aria-expanded={open} aria-controls="mobile-navigation" onClick={() => setOpen((value) => !value)}><Menu size={19} /></button>
           </div>
         </div>
-        <nav className={`mobile-nav ${open ? "open" : ""}`} aria-label="Mobile navigation">
+        <nav id="mobile-navigation" className={`mobile-nav ${open ? "open" : ""}`} aria-label="Mobile navigation">
           {[...navItems, { href: "/admissions", label: "Admissions" }, { href: "/contact", label: "Contact" }].map((item) => <Link key={item.href} href={item.href} onClick={() => setOpen(false)} aria-current={isCurrent(item.href) ? "page" : undefined}>{item.label}</Link>)}
         </nav>
       </header>
@@ -61,13 +62,13 @@ function SiteFooter() {
         <div>
           <div className="eyebrow inverse">IET / DSMNRU</div>
           <h2 style={{ color: "white", fontSize: "1.8rem", marginTop: 12 }}>Engineering for an accessible future.</h2>
-          <p>This website architecture belongs to IET. University-wide notices, examinations, results, admissions infrastructure and student ERP remain on DSMNRU systems.</p>
+          <p>Explore IET programmes, departments, people and research. Visit DSMNRU for university notices, examinations, results and student services.</p>
         </div>
-        <div><h3>Explore</h3><ul><li><Link href="/about">About IET</Link></li><li><Link href="/departments">Departments</Link></li><li><Link href="/programs">Programs</Link></li><li><Link href="/faculty">Faculty directory</Link></li><li><Link href="/laboratories">Laboratories</Link></li></ul></div>
-        <div><h3>Discover</h3><ul><li><Link href="/research">Research</Link></li><li><Link href="/projects">Projects</Link></li><li><Link href="/publications">Publications</Link></li><li><Link href="/events">Events</Link></li><li><Link href="/achievements">Achievements</Link></li><li><Link href="/career">Career &amp; industry</Link></li><li><Link href="/contact">Contact</Link></li></ul></div>
-        <div><h3>Official ecosystem</h3><ul><li><a href="https://dsmru.up.nic.in/" target="_blank" rel="noreferrer">DSMNRU website <ExternalLink size={12} /></a></li><li><a href="https://dsmru.samarth.edu.in/index.php/site/login" target="_blank" rel="noreferrer">Samarth student portal <ExternalLink size={12} /></a></li><li><Link href="/accessibility">Accessibility statement</Link></li><li><Link href="/privacy">Privacy placeholder</Link></li><li><Link href="/admin">CMS sign in</Link></li></ul></div>
+        <div><h3>Explore</h3><ul><li><Link href="/about">About IET</Link></li><li><Link href="/departments">Departments</Link></li><li><Link href="/programs">Programmes</Link></li><li><Link href="/faculty">Faculty directory</Link></li><li><Link href="/laboratories">Laboratories</Link></li><li><Link href="/infrastructure">Infrastructure</Link></li></ul></div>
+        <div><h3>Discover</h3><ul><li><Link href="/research">Research</Link></li><li><Link href="/projects">Projects</Link></li><li><Link href="/publications">Publications</Link></li><li><Link href="/events">Events</Link></li><li><Link href="/notices">Notices</Link></li><li><Link href="/organizations">Student organizations</Link></li><li><Link href="/resources">Resources</Link></li><li><Link href="/achievements">Achievements</Link></li><li><Link href="/career">Career &amp; industry</Link></li><li><Link href="/contact">Contact</Link></li></ul></div>
+        <div><h3>University services</h3><ul><li><a href="https://dsmru.up.nic.in/" target="_blank" rel="noreferrer">DSMNRU website <ExternalLink size={12} /></a></li><li><a href="https://dsmru.samarth.edu.in/index.php/site/login" target="_blank" rel="noreferrer">Samarth student portal <ExternalLink size={12} /></a></li><li><Link href="/accessibility">Accessibility statement</Link></li><li><Link href="/privacy">Privacy</Link></li></ul></div>
       </div>
-      <div className="container footer-bottom"><span>© IET-DSMNRU · Content is subject to institutional verification and approval.</span><span>Built for institutional ownership · English locale ready</span></div>
+      <div className="container footer-bottom"><span>© IET-DSMNRU</span><span>Dr. Shakuntala Misra National Rehabilitation University</span></div>
     </footer>
   );
 }

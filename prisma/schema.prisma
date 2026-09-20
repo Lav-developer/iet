@@ -64,6 +64,9 @@ model Department {
   events             Event[]
   organizations      StudentOrganization[]
   documents          Document[]
+  notices            Notice[]
+  socialLinks        DepartmentSocialLink[]
+  contacts           DepartmentContact[]
   departmentResearch DepartmentResearchArea[]
 
   @@index([status])
@@ -101,6 +104,11 @@ model FacultyMember {
   id                String                @id @default(cuid())
   slug              String                @unique
   name              String
+  profileImageId    String?
+  profileImage      Media? @relation("FacultyProfileImage", fields: [profileImageId], references: [id], onDelete: SetNull)
+  cvUrl             String?
+  cvDocumentId      String?
+  cvDocument        Document? @relation("FacultyCV", fields: [cvDocumentId], references: [id], onDelete: SetNull)
   designation       String
   email             String?
   phone             String?
@@ -120,9 +128,12 @@ model FacultyMember {
   projects          ProjectFaculty[]
   publications      PublicationFaculty[]
   laboratories      FacultyLaboratory[]
+  departmentContacts DepartmentContact[]
 
   @@index([departmentId])
   @@index([designation])
+  @@index([profileImageId])
+  @@index([cvDocumentId])
   @@index([status])
   @@index([name])
 }
@@ -384,6 +395,7 @@ model Media {
   updatedById  String?
   updatedAt    DateTime      @updatedAt
   achievements Achievement[]
+  facultyProfiles FacultyMember[] @relation("FacultyProfileImage")
 
   @@index([mimeType])
 }
@@ -406,6 +418,8 @@ model Document {
   updatedAt    DateTime      @updatedAt
   department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   page         Page?         @relation(fields: [pageId], references: [id], onDelete: SetNull)
+  facultyCVs   FacultyMember[] @relation("FacultyCV")
+  notices      Notice[]      @relation("NoticeDocument")
 
   @@index([departmentId])
   @@index([pageId])
@@ -483,4 +497,85 @@ model RateLimitBucket {
   updatedAt DateTime @updatedAt
 
   @@index([resetAt])
+}
+
+/**
+ * Department-owned official social/external channels. URLs are stored as
+ * structured values (never raw HTML) and validated before saving. Rows are
+ * removed with their department, and existing departments simply have none.
+ */
+model DepartmentSocialLink {
+  id           String     @id @default(cuid())
+  departmentId String
+  platform     String
+  url          String
+  label        String?
+  order        Int        @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@index([departmentId])
+  @@index([platform])
+}
+
+/**
+ * Explicit department-level contact configuration.
+ *
+ * A department's public contact is an editorial decision, so it is stored as
+ * its own relationship instead of being inferred from faculty ordering or from
+ * a free-text designation: the department selects the faculty member and the
+ * responsibility that person holds (Coordinator, Department In-Charge, Head of
+ * Department, Programme Coordinator, …). `role` is the configured label shown
+ * publicly, so no single responsibility is assumed for every department.
+ */
+model DepartmentContact {
+  id           String        @id @default(cuid())
+  departmentId String
+  facultyId    String
+  role         String
+  order        Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  department   Department    @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  faculty      FacultyMember @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, facultyId])
+  @@index([departmentId])
+  @@index([facultyId])
+}
+
+/**
+ * Institutional notice board. A notice is either a text notice (body) or a PDF
+ * notice that references a Document row — PDF bytes always live in object
+ * storage, never in PostgreSQL. noticeDate drives public ordering and
+ * expiryDate optionally closes public listing visibility.
+ */
+model Notice {
+  id           String        @id @default(cuid())
+  slug         String        @unique
+  title        String
+  summary      String?       @db.Text
+  body         String?       @db.Text
+  noticeType   String        @default("TEXT")
+  documentId   String?
+  document     Document?     @relation("NoticeDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  noticeDate   DateTime      @default(now())
+  expiryDate   DateTime?
+  category     String?
+  departmentId String?
+  department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  status       ContentStatus @default(DRAFT)
+  createdAt    DateTime      @default(now())
+  createdById  String?
+  updatedById  String?
+  updatedAt    DateTime      @updatedAt
+  publishedAt  DateTime?
+
+  @@index([status])
+  @@index([noticeDate])
+  @@index([expiryDate])
+  @@index([noticeType])
+  @@index([departmentId])
+  @@index([documentId])
 }

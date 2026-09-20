@@ -39,7 +39,7 @@ Production refuses to start when `DATABASE_URL`, a 32-character minimum `AUTH_SE
    DATABASE_URL="<production database url>" \
    BOOTSTRAP_ADMIN_EMAIL="platform-admin@iet.example.ac.in" \
    BOOTSTRAP_ADMIN_NAME="Platform Administrator" \
-   BOOTSTRAP_ADMIN_PASSWORD="<operator-generated, at least 12 characters, never a default>" \
+   BOOTSTRAP_ADMIN_PASSWORD="<operator-generated, at least 8 characters, never a default>" \
    BOOTSTRAP_I_UNDERSTAND=yes \
    npx tsx scripts/bootstrap-admin.ts
    ```
