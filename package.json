@@ -5,7 +5,7 @@
   "description": "A database-ready institutional web platform for the Institute of Engineering & Technology, DSMNRU.",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "tsc --noEmit",
     "test": "env -u DATABASE_URL -u NODE_ENV -u TRUSTED_PROXY_COUNT -u TRUSTED_PROXY_CIDRS tsx --test tests/*.test.ts",
