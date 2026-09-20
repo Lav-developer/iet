@@ -2,6 +2,7 @@
 
 import { Accessibility, Minus, Plus, RotateCcw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 const STORAGE_KEY = "iet-accessibility-preferences";
 type Preferences = { scale: number; contrast: boolean; reducedMotion: boolean };
@@ -46,8 +47,9 @@ export function AccessibilityWidget() {
       <button ref={triggerRef} className="icon-button" aria-expanded={open} aria-controls="accessibility-preferences" aria-label="Open accessibility preferences" title="Accessibility preferences" onClick={() => setOpen((value) => !value)}>
         <Accessibility size={18} aria-hidden="true" />
       </button>
-      {open && (
-        <section id="accessibility-preferences" className="accessibility-panel" aria-label="Accessibility preferences">
+      {/* A filtered header creates a containing block for fixed descendants. */}
+      {open && createPortal(
+        <section id="accessibility-preferences" className="public-accessibility-panel" aria-label="Accessibility preferences">
           <button ref={closeRef} className="panel-close" aria-label="Close accessibility preferences" onClick={() => { setOpen(false); triggerRef.current?.focus(); }}><X size={17} /></button>
           <h2>Accessibility preferences</h2>
           <p className="small">Your display preferences are saved on this device.</p>
@@ -58,7 +60,8 @@ export function AccessibilityWidget() {
             <button aria-pressed={preferences.reducedMotion} onClick={() => update({ reducedMotion: !preferences.reducedMotion })}>{preferences.reducedMotion ? "Motion on" : "Reduce motion"}</button>
           </div>
           <button className="button secondary small-button" style={{ marginTop: 10, width: "100%" }} onClick={() => update(defaults)}><RotateCcw size={14} /> Reset</button>
-        </section>
+        </section>,
+        document.body,
       )}
     </>
   );

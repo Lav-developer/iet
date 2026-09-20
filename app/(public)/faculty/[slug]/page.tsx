@@ -24,7 +24,7 @@ export default async function FacultyProfilePage({ params }: Props) {
   const publications = data.publications.filter((item) => item.authorSlugs?.includes(person.slug));
   return <>
     <PageHeader eyebrow="Faculty & staff" title={person.name} description={person.designation} breadcrumbs={[{ label: "Faculty & staff", href: "/faculty" }, { label: person.name }]} />
-    <section className="section"><div className="container detail-layout"><div>
+    <section className="section"><div className="container detail-layout faculty-profile-layout"><div>
       <section className="detail-section"><Avatar name={person.name} image={person.profileImage} />{person.profile && <p className="lead" style={{ marginTop: 24, whiteSpace: "pre-line" }}>{person.profile}</p>}
         {person.qualification && <><h2>Qualification</h2><p>{person.qualification}</p></>}
       </section>
