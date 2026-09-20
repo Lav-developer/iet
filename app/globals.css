@@ -417,6 +417,17 @@ p { margin: 0 0 15px; }
 .social-link-row { display: grid; grid-template-columns: minmax(9rem, .9fr) minmax(12rem, 1.6fr) auto; gap: 8px; margin-top: 8px; align-items: center; }
 .social-link-row .form-control, .social-link-row .form-select { min-width: 0; }
 @media (max-width: 620px) { .social-link-row { grid-template-columns: minmax(0, 1fr); } }
+/* Searchable department selector (department administrators only) */
+.department-select { position: relative; }
+.department-select-input { position: relative; display: flex; align-items: center; }
+.department-select-input > svg { position: absolute; left: 12px; color: var(--muted); pointer-events: none; }
+.department-select-input .form-control { padding-left: 34px; }
+.department-select-list { position: absolute; z-index: 40; left: 0; right: 0; top: 100%; max-height: 260px; overflow-y: auto; overscroll-behavior: contain; margin: 4px 0 0; padding: 4px; list-style: none; background: var(--white); border: 1px solid var(--ink); box-shadow: var(--shadow); }
+.department-select-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left; background: transparent; border: 0; padding: 10px 11px; font-size: .84rem; font-weight: 700; color: var(--ink); }
+.department-select-option:hover, .department-select-option.active { background: var(--paper-2); color: var(--copper-dark); }
+.department-select-status { color: var(--muted); font-weight: 600; text-transform: lowercase; }
+.department-select-empty { padding: 11px; font-size: .78rem; color: var(--muted); }
+.department-select > .form-hint { display: block; }
 .form-actions { display: flex; justify-content: flex-end; gap: 9px; padding-top: 18px; margin-top: 10px; border-top: 1px solid var(--line); }
 .login-page { min-height: 100vh; background: var(--ink); display: grid; place-items: center; padding: 25px; }
 .login-card { width: min(470px, 100%); background: white; padding: 36px; border-top: 5px solid var(--lime); box-shadow: var(--shadow); }
