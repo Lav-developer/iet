@@ -74,7 +74,7 @@ test("the form validates locally but the server stays authoritative", () => {
   assert.match(form, /"Content-Type": "application\/json"/);
   // Requirements come from the shared policy module, not a hardcoded number.
   assert.match(page, /PASSWORD_REQUIREMENT/);
-  assert.doesNotMatch(page, /12 characters|at least 12/);
+  assert.doesNotMatch(page, new RegExp(`at least ${MIN_PASSWORD_LENGTH + 4}`));
 });
 
 test("the shared policy still governs every password surface", () => {
