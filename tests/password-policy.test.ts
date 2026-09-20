@@ -40,6 +40,9 @@ test("the seven/eight boundary is applied by the administrator API schema", () =
 test("every password length check uses the shared constant, with no hardcoded 12 anywhere", () => {
   const offenders: string[] = [];
   for (const file of repositoryFiles()) {
+    // This guard necessarily contains the old patterns in its own negative
+    // assertions, so it is excluded from the scan it performs.
+    if (file === "tests/password-policy.test.ts") continue;
     const source = readFileSync(file, "utf8");
     if (/min\(12\)|length < 12|minLength=\{12\}|12 characters|at least 12/i.test(source)) offenders.push(file);
   }
