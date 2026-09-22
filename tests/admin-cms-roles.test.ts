@@ -78,9 +78,15 @@ test("EDITOR keeps institutional content editing and is offered no administrativ
 });
 
 test("entity capabilities never offer what the workflow would reject", () => {
-  assert.deepEqual(entityCapability(EDITOR, "notices").createStatusOptions, ["DRAFT"]);
+  assert.deepEqual(entityCapability(EDITOR, "notices").createStatusOptions, ["DRAFT", "REVIEW"]);
   assert.deepEqual(entityCapability(EDITOR, "notices").editStatusOptions, ["DRAFT", "REVIEW"]);
+  assert.equal(entityCapability(EDITOR, "notices").canPublish, false);
   assert.deepEqual(entityCapability(DEPT, "notices").editStatusOptions, ["DRAFT", "REVIEW"]);
+  assert.equal(entityCapability(DEPT, "notices").canPublish, false);
+  // Publishing roles publish directly: a new record may be created as PUBLISHED.
+  assert.deepEqual(entityCapability(SUPER, "notices").createStatusOptions, ["DRAFT", "REVIEW", "PUBLISHED"]);
+  assert.equal(entityCapability(SUPER, "notices").canPublish, true);
+  assert.equal(entityCapability({ role: "IET_ADMIN" }, "notices").canPublish, true);
   assert.equal(entityCapability(DEPT, "notices", "computer-science-engineering").fixedDepartmentSlug, "computer-science-engineering");
   // Without a resolvable department the editor must not invent one.
   assert.equal(entityCapability(DEPT, "notices").fixedDepartmentSlug, undefined);

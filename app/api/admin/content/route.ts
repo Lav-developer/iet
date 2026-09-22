@@ -4,7 +4,7 @@ import { z } from "zod";
 import { requireAdmin, type SessionUser } from "@/lib/auth";
 import { getPrisma } from "@/lib/db";
 import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
-import { canAccess, departmentScoped, entitySchema, sanitize, validatePayload, workflowTransitionAllowed } from "@/lib/content-policy";
+import { canAccess, canPublish, departmentScoped, entitySchema, sanitize, validatePayload, workflowTransitionAllowed } from "@/lib/content-policy";
 import { deleteEntity, getEntity, getEntityLabel, getSingleEntityRecord, upsertEntity } from "@/lib/store";
 import type { EntityName } from "@/lib/types";
 
@@ -61,7 +61,11 @@ export async function POST(request: Request) {
     const entity = entitySchema.parse(body.entity);
     const data = sanitize(entity, body.data || {});
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
-    if (!canAccess(user, entity, "write", data, undefined, assignedDepartmentSlug) || !workflowTransitionAllowed(user, undefined, data.status) || !(await departmentRelationsAllowed(user, entity, data))) return NextResponse.json({ error: "Your role cannot create this record, use that workflow transition, or its relationships are outside the assigned department." }, { status: 403 });
+    // Three separate decisions, each with a plain-language explanation, so an
+    // administrator learns what to change instead of guessing between causes.
+    if (!canAccess(user, entity, "write", data, undefined, assignedDepartmentSlug)) return forbidden(accessDeniedMessage(user, entity, "create", data, undefined, assignedDepartmentSlug));
+    if (!workflowTransitionAllowed(user, undefined, data.status)) return forbidden(workflowDeniedMessage(user, undefined, data.status));
+    if (!(await departmentRelationsAllowed(user, entity, data))) return forbidden(RELATIONS_OUTSIDE_DEPARTMENT);
     validatePayload(entity, data);
     await validateAssetRelations(user, entity, data, getSingleEntityRecord, assignedDepartmentSlug);
     const record = await upsertEntity(entity, data, user.email, undefined, user.id, user.role, requestIp(request));
@@ -85,7 +89,9 @@ export async function PATCH(request: Request) {
     if (!current) return NextResponse.json({ error: "Record not found" }, { status: 404 });
     const data = sanitize(entity, body.data || {});
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
-    if (!canAccess(user, entity, "write", data, current, assignedDepartmentSlug) || !workflowTransitionAllowed(user, current, data.status) || !(await departmentRelationsAllowed(user, entity, data))) return NextResponse.json({ error: "Your role cannot update this record, use that workflow transition, or its relationships are outside the assigned department." }, { status: 403 });
+    if (!canAccess(user, entity, "write", data, current, assignedDepartmentSlug)) return forbidden(accessDeniedMessage(user, entity, "update", data, current, assignedDepartmentSlug));
+    if (!workflowTransitionAllowed(user, current, data.status)) return forbidden(workflowDeniedMessage(user, current, data.status));
+    if (!(await departmentRelationsAllowed(user, entity, data))) return forbidden(RELATIONS_OUTSIDE_DEPARTMENT);
     // Validate the record as it will exist after the update. Validating the
     // incoming fragment alone rejected every workflow-only status change on a
     // notice ("A text notice requires a notice body.") because the rest of the
@@ -113,12 +119,49 @@ export async function DELETE(request: Request) {
     const current = (await getSingleEntityRecord(entity, id)) as Record<string, unknown> | undefined;
     if (!current) return NextResponse.json({ error: "Record not found" }, { status: 404 });
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
-    if (!canAccess(user, entity, "delete", undefined, current, assignedDepartmentSlug)) return NextResponse.json({ error: "Your role cannot delete records." }, { status: 403 });
+    if (!canAccess(user, entity, "delete", undefined, current, assignedDepartmentSlug)) return forbidden("Your role cannot delete records. Unpublish or archive the record instead, or ask an institute administrator.");
     await deleteEntity(entity, id, user.email, user.id, user.role, requestIp(request));
     return NextResponse.json({ ok: true });
   } catch (error) {
     return handleError(error, "Unable to delete record.");
   }
+}
+
+const RELATIONS_OUTSIDE_DEPARTMENT = "One or more linked records (people or laboratories) belong to another department. Link only records from your own department.";
+
+function forbidden(message: string) {
+  return NextResponse.json({ error: message }, { status: 403 });
+}
+
+/** Why `canAccess` refused a write, in words a non-technical administrator can act on. */
+function accessDeniedMessage(user: SessionUser, entity: EntityName, verb: "create" | "update", data: Record<string, unknown>, current: Record<string, unknown> | undefined, assignedDepartmentSlug: string | undefined) {
+  const currentStatus = current ? String(current.status || "DRAFT") : undefined;
+  if (user.role === "DEPARTMENT_ADMIN") {
+    if (!departmentScoped.has(entity)) return "Your role is scoped to department content.";
+    if (!user.departmentId || !assignedDepartmentSlug) return "Your account has no department assigned yet, so it cannot change content. Ask an institute administrator to assign your department.";
+    const currentDepartment = current?.departmentSlug;
+    const requestedDepartment = data.departmentSlug === undefined ? currentDepartment : data.departmentSlug;
+    if (currentDepartment && currentDepartment !== assignedDepartmentSlug) return "This record belongs to another department. You can only change records of your own department.";
+    if (requestedDepartment !== assignedDepartmentSlug) return verb === "create" ? "You can only create records for your own department." : "Records must stay in your own department; moving a record to another department is not permitted.";
+  }
+  if (currentStatus === "ARCHIVED") return "This record is archived and cannot be changed. An institute administrator can restore it as a draft.";
+  if (data.status === "PUBLISHED" && currentStatus !== "PUBLISHED") return "Your role can save and submit content for review, but publishing is done by an institute administrator.";
+  if (data.status === "ARCHIVED") return "Your role cannot archive records. Ask an institute administrator.";
+  if (currentStatus === "PUBLISHED" && data.status !== undefined && data.status !== "PUBLISHED") return "Your role cannot unpublish a published record. Save your changes instead, or ask an institute administrator to unpublish it.";
+  return verb === "create" ? "Your role cannot create this record." : "Your role cannot change this record.";
+}
+
+/** Why the workflow refused a status change. */
+function workflowDeniedMessage(user: SessionUser, current: Record<string, unknown> | undefined, requested: unknown) {
+  const next = String(requested);
+  const previous = current ? String(current.status || "DRAFT") : undefined;
+  if (!["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"].includes(next)) return "The requested status is not recognised.";
+  if (next === "PUBLISHED" && !canPublish(user)) return "Your role can save and submit content for review, but publishing is done by an institute administrator.";
+  if (!previous && next === "ARCHIVED") return "A new record cannot be created as archived. Save it as a draft or publish it.";
+  if (next === "ARCHIVED" && previous !== "PUBLISHED") return "Only a published record can be archived. Unpublished records can simply stay as drafts.";
+  if (previous === "ARCHIVED") return canPublish(user) ? "An archived record must be restored as a draft before it is published again." : "This record is archived. An institute administrator can restore it.";
+  if (previous === "PUBLISHED" && !canPublish(user)) return "Your role cannot unpublish a published record. Save your changes instead, or ask an institute administrator to unpublish it.";
+  return "That change of status is not available for this record.";
 }
 
 async function departmentRelationsAllowed(user: SessionUser, entity: EntityName, payload: Record<string, unknown>) {

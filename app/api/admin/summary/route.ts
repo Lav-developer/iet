@@ -34,10 +34,10 @@ export async function GET() {
       : undefined;
     const summary = await getDashboardSummary(scope);
     const health = [
-      { label: "Database connection", detail: databaseConfigured ? "DATABASE_URL configured; Prisma adapter active." : "No DATABASE_URL; review seed store is active for preview.", ok: databaseConfigured },
+      { label: "Database connection", detail: databaseConfigured ? "The website is reading and saving content in the live database." : "No database is configured; preview content is shown.", ok: databaseConfigured },
       { label: "Public publishing", detail: `${summary.publishedDepartments} departments are currently published.`, ok: summary.hasPublishedDepartment },
-      { label: "Workflow coverage", detail: "Every editorial entity carries a status field.", ok: true },
-      { label: "Institutional handover", detail: "Environment variables, schema and migration docs are present.", ok: true },
+      { label: "Publishing workflow", detail: "Records are saved as drafts and published directly by institute administrators; review is optional.", ok: true },
+      { label: "Audit log", detail: "Every content change is recorded with the account that made it.", ok: true },
     ];
     return NextResponse.json({ mode: summary.mode, stats: summary.stats, health });
   } catch (error) {

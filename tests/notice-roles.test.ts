@@ -44,12 +44,16 @@ test("a DEPARTMENT_ADMIN can only create and manage their own department's notic
   assert.equal(workflowTransitionAllowed(IET, { id: "n", status: "REVIEW" }, "PUBLISHED"), true);
 });
 
-test("EDITOR notice permissions keep their existing scope (no delete, no publish, institution-wide)", () => {
+test("EDITOR notice permissions keep their existing scope (no delete, no publish, institution-wide) and may edit a published notice", () => {
   assert.equal(canAccess(EDITOR, "notices", "write", { status: "DRAFT" }, undefined, undefined), true);
   assert.equal(canAccess(EDITOR, "notices", "write", { status: "REVIEW" }, draftNotice(), undefined), true);
   assert.equal(canAccess(EDITOR, "notices", "delete", undefined, draftNotice(), undefined), false);
-  assert.equal(canAccess(EDITOR, "notices", "write", { status: "PUBLISHED" }, draftNotice(), undefined), false);
-  assert.equal(canAccess(EDITOR, "notices", "write", undefined, { id: "n", status: "PUBLISHED" }, undefined), false);
+  assert.equal(canAccess(EDITOR, "notices", "write", { status: "PUBLISHED" }, draftNotice(), undefined), false, "an editor cannot publish");
+  // Editing authority is separate from publishing authority: a published
+  // notice can be corrected by an editor, and stays published.
+  assert.equal(canAccess(EDITOR, "notices", "write", undefined, { id: "n", status: "PUBLISHED" }, undefined), true);
+  assert.equal(canAccess(EDITOR, "notices", "write", { status: "PUBLISHED", title: "Corrected title" }, { id: "n", status: "PUBLISHED" }, undefined), true);
+  assert.equal(canAccess(EDITOR, "notices", "write", { status: "DRAFT" }, { id: "n", status: "PUBLISHED" }, undefined), false, "an editor cannot unpublish");
 });
 
 test("the create form sends the value its select is displaying", () => {

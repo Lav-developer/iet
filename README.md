@@ -31,7 +31,7 @@ Important editorial rules built into the product:
 - The PDF's seat matrix is represented as programme records; current eligibility, fees and application rules are handed back to the official DSMNRU admissions system.
 - Projects, publications, achievements, events and student organisations that are not present in the source are stored as clearly marked draft placeholders and do not render publicly.
 - Faculty and staff contact details should be confirmed by IET before official publication.
-- This build is **not officially endorsed or live**. It is a review-ready implementation candidate subject to IET / DSMNRU approval.
+- Content is published by IET / DSMNRU administrators through the content management system; only published records appear on the public website.
 
 See [`docs/CONTENT-VERIFICATION.md`](docs/CONTENT-VERIFICATION.md) for the source inventory and editorial handover checklist.
 

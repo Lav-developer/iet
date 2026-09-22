@@ -943,8 +943,8 @@ export const seedData: SiteData = {
     {
       id: "setting-content-status",
       key: "institution.contentStatus",
-      value: "Review-ready prototype · institutional approval required before production publication",
-      description: "Public provenance banner.",
+      value: "Content is maintained by the Institute of Engineering & Technology (IET), DSMNRU through the content management system; only published records appear on the public website.",
+      description: "Content ownership statement.",
     },
     {
       id: "setting-language",

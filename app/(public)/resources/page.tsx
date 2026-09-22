@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { EmptyState, PageHeader, SectionHeading } from "@/components/ui";
 import { getSiteData } from "@/lib/store";
 import { mediaDeliveryUrl, safeExternalUrl } from "@/lib/public-content";
@@ -8,7 +9,7 @@ export default async function ResourcesPage() {
   const links = data.links.filter((link) => safeExternalUrl(link.url));
   const documents = data.documents.filter((doc) => doc.mimeType === "application/pdf" && isDocumentCollectionKey(doc.key));
   return <><PageHeader eyebrow="Resources" title="Resources & official links" description="Find university services, institutional information and documents." breadcrumbs={[{ label: "Resources" }]} />
-    <section className="section"><div className="container"><SectionHeading eyebrow="Official links" title="University & institute resources" />{links.length ? <div className="data-grid">{links.map((link) => <a className="data-card" href={safeExternalUrl(link.url)} target="_blank" rel="noopener noreferrer" key={link.id}><span className="tag">{link.owner}</span><h3>{link.label}</h3><p>{link.description}</p><span className="link-arrow">Open resource (new tab)</span></a>)}</div> : <EmptyState title="No resource links to display" />}</div></section>
+    <section className="section"><div className="container"><SectionHeading eyebrow="Official links" title="University & institute resources" /><div className="data-grid" style={{ marginBottom: 22 }}><Link className="data-card" href="/admissions/fee-structure"><span className="tag">IET</span><h3>Fee structure</h3><p>Semester-wise fee tables for the B.Tech (Under Self Finance Scheme) and M.Tech programmes.</p><span className="link-arrow">View fee structure</span></Link></div>{links.length ? <div className="data-grid">{links.map((link) => <a className="data-card" href={safeExternalUrl(link.url)} target="_blank" rel="noopener noreferrer" key={link.id}><span className="tag">{link.owner}</span><h3>{link.label}</h3><p>{link.description}</p><span className="link-arrow">Open resource (new tab)</span></a>)}</div> : <EmptyState title="No resource links to display" />}</div></section>
     {documents.length > 0 && <section className="section soft"><div className="container"><SectionHeading eyebrow="IET resources" title="Documents" /><div className="data-grid">{documents.map((doc) => <a className="data-card" href={mediaDeliveryUrl(doc.key)} key={doc.id}><h3>{doc.title}</h3><p>{doc.description}</p><span className="link-arrow">Download PDF</span></a>)}</div></div></section>}
   </>;
 }

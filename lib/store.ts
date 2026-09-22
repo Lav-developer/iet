@@ -159,7 +159,7 @@ export type DashboardSummary = {
 
 const dashboardEntities: { label: string; entity: "departments" | "programs" | "faculty" | "laboratories" }[] = [
   { label: "Departments", entity: "departments" },
-  { label: "Programs", entity: "programs" },
+  { label: "Programmes", entity: "programs" },
   { label: "Faculty & staff", entity: "faculty" },
   { label: "Laboratories", entity: "laboratories" },
 ];
@@ -269,6 +269,7 @@ export async function upsertEntity(
       const savedRow = await upsertDatabaseEntity(entity, payload, id, actorId, tx);
       await syncRelationships(entity, savedRow.id, payload, tx);
       await appendAuditEntry(tx, { user: actor, userId: actorId, role, ipAddress, action: id ? "UPDATED" : "CREATED", entity, entityId: String((savedRow as { id: string }).id), before, after: savedRow });
+      await publishLinkedNoticeDocument(entity, savedRow, { user: actor, userId: actorId, role, ipAddress }, tx);
       return savedRow;
     });
     return saved;
@@ -291,9 +292,45 @@ export async function upsertEntity(
   const index = id ? list.findIndex((item) => item.id === id) : -1;
   if (index >= 0) list[index] = next;
   else list.unshift(next);
+  // Publishing a PDF notice publishes exactly the PDF it links to (see
+  // publishLinkedNoticeDocument for the database path).
+  const linkedDocumentId = linkedNoticeDocumentToPublish(entity, next);
+  const linkedDocument = linkedDocumentId ? (demoStore.documents as unknown as Array<Record<string, unknown>>).find((item) => item.id === linkedDocumentId) : undefined;
+  const documentBefore = linkedDocument && linkedDocument.status !== "PUBLISHED" ? { ...linkedDocument } : undefined;
+  if (linkedDocument && documentBefore) Object.assign(linkedDocument, { status: "PUBLISHED", updatedAt: now });
   writeDemoStore(demoStore);
   await appendAudit({ user: actor, userId: actorId, role, ipAddress, action: id ? "UPDATED" : "CREATED", entity, entityId: generatedId, before: previous, after: next });
+  if (linkedDocument && documentBefore) await appendAudit({ user: actor, userId: actorId, role, ipAddress, action: "PUBLISHED_WITH_NOTICE", entity: "documents", entityId: String(linkedDocument.id), before: documentBefore, after: linkedDocument });
   return clone(next);
+}
+
+/**
+ * The single document a just-saved notice makes public, if any.
+ *
+ * Publishing a PDF notice must make its PDF available without a second
+ * approval in Documents — but only that one PDF: the notice's own link is the
+ * only document ever touched, never any other draft in the library.
+ */
+export function linkedNoticeDocumentToPublish(entity: EntityName, saved: Record<string, unknown> | { id: string }): string | undefined {
+  if (entity !== "notices") return undefined;
+  const notice = saved as { status?: unknown; noticeType?: unknown; documentId?: unknown };
+  if (notice.status !== "PUBLISHED") return undefined;
+  if (String(notice.noticeType || "").toUpperCase() !== "PDF") return undefined;
+  return typeof notice.documentId === "string" && notice.documentId ? notice.documentId : undefined;
+}
+
+/**
+ * Database path of the rule above, inside the notice's own transaction: the
+ * notice and its PDF become public together, and the document change carries
+ * its own audit entry attributed to the publishing administrator.
+ */
+export async function publishLinkedNoticeDocument(entity: EntityName, saved: { id: string }, audit: { user: string; userId?: string; role?: string; ipAddress?: string }, client: TxClient) {
+  const documentId = linkedNoticeDocumentToPublish(entity, saved);
+  if (!documentId) return;
+  const document = await client.document.findUnique({ where: { id: documentId } });
+  if (!document || document.status === "PUBLISHED") return;
+  const after = await client.document.update({ where: { id: document.id }, data: { status: "PUBLISHED", ...(audit.userId ? { updatedById: audit.userId } : {}) } });
+  await appendAuditEntry(client, { ...audit, action: "PUBLISHED_WITH_NOTICE", entity: "documents", entityId: document.id, before: document, after });
 }
 
 export async function deleteEntity(entity: EntityName, id: string, actor = "demo admin", actorId?: string, role?: string, ipAddress?: string) {

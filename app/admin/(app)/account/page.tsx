@@ -43,7 +43,7 @@ export default async function AccountPage() {
           <li>The change is recorded in the audit log as <code>PASSWORD_CHANGED_AND_INVALIDATED_SESSIONS</code> with your account and IP address.</li>
           <li>Sign-in attempts, including this endpoint, are rate limited and return generic messages.</li>
         </ul>
-        <p className="small">If you believe another person knows your password, change it here and then use <strong>Sign out</strong> in the sidebar.</p>
+        <p className="small">If you believe another person knows your password, change it here and then use <strong>Sign out</strong> in the top bar.</p>
       </section>
     </div>
   </>;

@@ -4,59 +4,76 @@ import { DepartmentSelect, type DepartmentOption } from "@/components/department
 import { Plus, Save, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { EntityName } from "@/lib/types";
-import type { EntityCapabilityDetail } from "@/lib/content-policy";
+import { slugify, workflowActions, type EntityCapabilityDetail, type WorkflowAction } from "@/lib/content-policy";
 
-const configs: Record<EntityName, { title: string; description: string; titleField: string; fields: { key: string; label: string; type?: "textarea" | "select" | "number" | "asset" | "date" | "department" | "status"; options?: string[]; full?: boolean; hint?: string }[] }> = {
-  departments: { title: "Departments", description: "Academic units and their connected content.", titleField: "name", fields: [
-    { key: "name", label: "Department name" }, { key: "shortName", label: "Short name" }, { key: "slug", label: "URL slug", hint: "Use lowercase words separated by hyphens." }, { key: "established", label: "Established" }, { key: "overview", label: "Overview", type: "textarea", full: true }, { key: "sourceNote", label: "Source note", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+/**
+ * Editor configuration for one content type.
+ *
+ * Labels and hints are written for non-technical university staff: no
+ * database identifiers, storage keys, MIME types or Prisma vocabulary. The
+ * public web address ("slug") is the only technical-looking value that is
+ * shown, because it is part of the public page URL; it is filled in
+ * automatically from the name or title when left blank.
+ */
+type FieldType = "textarea" | "select" | "number" | "asset" | "date" | "department";
+type FieldConfig = { key: string; label: string; type?: FieldType; options?: string[]; optionLabels?: Record<string, string>; full?: boolean; hint?: string; required?: boolean };
+type EntityConfig = { title: string; singular: string; description: string; titleField: string; fields: FieldConfig[] };
+
+const WEB_ADDRESS_HINT = "The last part of this page's web address, in lowercase words joined by hyphens. Leave blank to create it from the name.";
+const LINKED_LABORATORIES_HINT = "Web addresses of the laboratories, separated by commas (as shown in Laboratories). Leave blank if none.";
+const LINKED_FACULTY_HINT = "Web addresses of the faculty members, separated by commas (as shown in Faculty & staff). Leave blank if none.";
+
+const configs: Record<EntityName, EntityConfig> = {
+  departments: { title: "Departments", singular: "department", description: "Academic departments and their public profile.", titleField: "name", fields: [
+    { key: "name", label: "Department name", required: true }, { key: "shortName", label: "Short name (abbreviation)" }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "established", label: "Year established" }, { key: "overview", label: "Overview", type: "textarea", full: true }, { key: "sourceNote", label: "Internal source note (not shown publicly)", type: "textarea", full: true },
   ] },
-  programs: { title: "Programs", description: "Programmes with level, duration, seat matrix and department relationships.", titleField: "title", fields: [
-    { key: "title", label: "Programme title" }, { key: "shortTitle", label: "Short title" }, { key: "slug", label: "URL slug" }, { key: "level", label: "Level" }, { key: "duration", label: "Duration" }, { key: "approvedSeats", label: "Approved seats", type: "number" }, { key: "departmentSlug", label: "Department slug", hint: "Use the related department URL slug." }, { key: "laboratorySlugs", label: "Laboratory slugs", hint: "Comma-separated laboratory slugs." }, { key: "summary", label: "Summary", type: "textarea", full: true }, { key: "eligibility", label: "Eligibility (only if verified)", type: "textarea", full: true }, { key: "admissionNote", label: "Admissions hand-off note", type: "textarea", full: true }, { key: "sourceNote", label: "Source note", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  programs: { title: "Programmes", singular: "programme", description: "Programmes with level, duration, approved seats and department.", titleField: "title", fields: [
+    { key: "title", label: "Programme title", required: true }, { key: "shortTitle", label: "Short title" }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "level", label: "Level", hint: "For example: Undergraduate, Postgraduate." }, { key: "duration", label: "Duration", hint: "For example: 4 years." }, { key: "approvedSeats", label: "Approved seats", type: "number" }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "laboratorySlugs", label: "Linked laboratories", hint: LINKED_LABORATORIES_HINT }, { key: "summary", label: "Summary", type: "textarea", full: true }, { key: "eligibility", label: "Eligibility (only if verified)", type: "textarea", full: true }, { key: "admissionNote", label: "Admissions note", type: "textarea", full: true }, { key: "sourceNote", label: "Internal source note (not shown publicly)", type: "textarea", full: true },
   ] },
-  faculty: { title: "Faculty & staff", description: "People records, roles and department relationships.", titleField: "name", fields: [
-    { key: "name", label: "Name" }, { key: "slug", label: "URL slug" }, { key: "designation", label: "Designation", hint: "Include (Coordinator) for the department coordinator." }, { key: "profileImageId", label: "Profile photograph", type: "asset", full: true }, { key: "cvUrl", label: "External CV URL", hint: "HTTPS only. Takes precedence over the CV document if both are set." }, { key: "cvDocumentId", label: "CV PDF document", type: "asset", full: true }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "type", label: "Person type", hint: "FACULTY, LEADERSHIP, LABORATORY STAFF or NON-TEACHING STAFF" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "qualification", label: "Qualification", type: "textarea" }, { key: "researchInterests", label: "Research interests", type: "textarea", hint: "Comma-separated values; only publish verified interests." }, { key: "researchAreaSlugs", label: "Research area slugs", hint: "Comma-separated normalized research-area slugs." }, { key: "laboratorySlugs", label: "Laboratory slugs", hint: "Comma-separated normalized laboratory slugs." }, { key: "profile", label: "Profile", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  faculty: { title: "Faculty & staff", singular: "person", description: "Faculty and staff profiles with their department.", titleField: "name", fields: [
+    { key: "name", label: "Full name", required: true }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "designation", label: "Designation", hint: "Add (Coordinator) after the designation for the department coordinator." }, { key: "profileImageId", label: "Profile photograph", type: "asset", full: true }, { key: "cvUrl", label: "Link to CV on another website (optional)", hint: "Must start with https://. If both a link and a CV PDF are set, the link is used." }, { key: "cvDocumentId", label: "CV as PDF (optional)", type: "asset", full: true }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "type", label: "Role type", type: "select", options: ["FACULTY", "LEADERSHIP", "LABORATORY STAFF", "NON-TEACHING STAFF"], optionLabels: { FACULTY: "Faculty", LEADERSHIP: "Leadership", "LABORATORY STAFF": "Laboratory staff", "NON-TEACHING STAFF": "Non-teaching staff" } }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "qualification", label: "Qualification", type: "textarea" }, { key: "researchInterests", label: "Research interests", type: "textarea", hint: "Separate interests with commas. Publish only verified interests." }, { key: "researchAreaSlugs", label: "Linked research areas", hint: "Web addresses of the research areas, separated by commas (as shown in Research). Leave blank if none." }, { key: "laboratorySlugs", label: "Linked laboratories", hint: LINKED_LABORATORIES_HINT }, { key: "profile", label: "Profile / biography", type: "textarea", full: true },
   ] },
-  laboratories: { title: "Laboratories", description: "Facilities connected to programmes, people and research.", titleField: "name", fields: [
-    { key: "name", label: "Laboratory name" }, { key: "slug", label: "URL slug" }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "equipment", label: "Equipment / inventory", type: "textarea", full: true }, { key: "courses", label: "Courses supported", type: "textarea" }, { key: "researchRelevance", label: "Research relevance", type: "textarea" }, { key: "status", label: "Workflow status", type: "status" },
+  laboratories: { title: "Laboratories", singular: "laboratory", description: "Laboratories and facilities with their department.", titleField: "name", fields: [
+    { key: "name", label: "Laboratory name", required: true }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "equipment", label: "Equipment / facilities", type: "textarea", full: true }, { key: "courses", label: "Courses supported", type: "textarea" }, { key: "researchRelevance", label: "Research relevance", type: "textarea" },
   ] },
-  researchAreas: { title: "Research areas", description: "Approved research domains with relationship hooks.", titleField: "name", fields: [
-    { key: "name", label: "Research area" }, { key: "slug", label: "URL anchor / slug" }, { key: "facultySlugs", label: "Faculty slugs", hint: "Comma-separated faculty slugs." }, { key: "departmentSlugs", label: "Department slugs", hint: "Comma-separated department slugs." }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "sourceNote", label: "Source note", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  researchAreas: { title: "Research areas", singular: "research area", description: "Research areas and the people connected to them.", titleField: "name", fields: [
+    { key: "name", label: "Research area", required: true }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "facultySlugs", label: "Linked faculty members", hint: LINKED_FACULTY_HINT }, { key: "departmentSlugs", label: "Linked departments", hint: "Web addresses of the departments, separated by commas. Leave blank if none." }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "sourceNote", label: "Internal source note (not shown publicly)", type: "textarea", full: true },
   ] },
-  projects: { title: "Projects", description: "Research and innovation projects. Publish only approved records.", titleField: "title", fields: [
-    { key: "title", label: "Project title" }, { key: "slug", label: "URL slug" }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "sponsor", label: "Sponsor" }, { key: "facultySlugs", label: "Faculty slugs", hint: "Comma-separated faculty slugs." }, { key: "laboratorySlugs", label: "Laboratory slugs", hint: "Comma-separated laboratory slugs." }, { key: "summary", label: "Summary", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  projects: { title: "Projects", singular: "project", description: "Research and innovation projects. Publish only approved records.", titleField: "title", fields: [
+    { key: "title", label: "Project title", required: true }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "sponsor", label: "Sponsor / funding agency" }, { key: "facultySlugs", label: "Linked faculty members", hint: LINKED_FACULTY_HINT }, { key: "laboratorySlugs", label: "Linked laboratories", hint: LINKED_LABORATORIES_HINT }, { key: "summary", label: "Summary", type: "textarea", full: true },
   ] },
-  publications: { title: "Publications", description: "Bibliographic records with authors and source links.", titleField: "title", fields: [
-    { key: "title", label: "Title", type: "textarea", full: true }, { key: "slug", label: "URL slug" }, { key: "venue", label: "Venue / journal" }, { key: "year", label: "Year", type: "number" }, { key: "doi", label: "DOI" }, { key: "url", label: "External URL" }, { key: "abstract", label: "Abstract", type: "textarea", full: true }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "authorSlugs", label: "Author faculty slugs", hint: "Comma-separated normalized faculty slugs." }, { key: "status", label: "Workflow status", type: "status" },
+  publications: { title: "Publications", singular: "publication", description: "Publications with authors and source links.", titleField: "title", fields: [
+    { key: "title", label: "Title", type: "textarea", full: true, required: true }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "venue", label: "Journal / conference" }, { key: "year", label: "Year", type: "number" }, { key: "doi", label: "DOI (optional)" }, { key: "url", label: "Link to the publication (optional)", hint: "Must start with http:// or https://." }, { key: "abstract", label: "Abstract", type: "textarea", full: true }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "authorSlugs", label: "IET authors", hint: LINKED_FACULTY_HINT },
   ] },
-  achievements: { title: "Achievements", description: "Verified student, team, faculty and institutional achievements.", titleField: "title", fields: [
-    { key: "title", label: "Achievement" }, { key: "category", label: "Category" }, { key: "recipient", label: "Student / team / faculty" }, { key: "year", label: "Year", type: "number" }, { key: "eventName", label: "Event" }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  achievements: { title: "Achievements", singular: "achievement", description: "Verified student, team, faculty and institutional achievements.", titleField: "title", fields: [
+    { key: "title", label: "Achievement", required: true }, { key: "category", label: "Category", hint: "For example: Student achievement, Faculty award." }, { key: "recipient", label: "Student / team / faculty member" }, { key: "year", label: "Year", type: "number" }, { key: "eventName", label: "Event or competition" }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "description", label: "Description", type: "textarea", full: true },
   ] },
-  events: { title: "Events", description: "IET-specific workshops, seminars, conferences and activities.", titleField: "title", fields: [
-    { key: "title", label: "Event title" }, { key: "slug", label: "URL slug" }, { key: "startsAt", label: "Starts at", hint: "ISO date/time is accepted." }, { key: "endsAt", label: "Ends at" }, { key: "location", label: "Location" }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "organizationId", label: "Student organization", type: "asset" }, { key: "registrationUrl", label: "Registration URL" }, { key: "summary", label: "Summary", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  events: { title: "Events", singular: "event", description: "Workshops, seminars, conferences and student activities.", titleField: "title", fields: [
+    { key: "title", label: "Event title", required: true }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "startsAt", label: "Start date", type: "date" }, { key: "endsAt", label: "End date (optional)", type: "date" }, { key: "location", label: "Venue / location" }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "organizationId", label: "Student organization (optional)", type: "asset" }, { key: "registrationUrl", label: "Registration link (optional)", hint: "Must start with http:// or https://." }, { key: "summary", label: "Summary", type: "textarea", full: true },
   ] },
-  notices: { title: "Notices", description: "Institutional notice board: text notices and PDF notices with an editorial workflow.", titleField: "title", fields: [
-    { key: "title", label: "Notice title" }, { key: "slug", label: "URL slug" }, { key: "noticeType", label: "Notice type", type: "select", options: ["TEXT", "PDF"], hint: "TEXT notices are read on the site. PDF notices link to an uploaded PDF." }, { key: "documentId", label: "PDF document", type: "asset", full: true, hint: "Required for a PDF notice: upload a PDF or choose an existing published document. To replace the PDF, choose or upload another one; to remove it, select “None”. A draft PDF becomes visible publicly only once it is published in Documents." }, { key: "noticeDate", label: "Notice date", type: "date" }, { key: "expiryDate", label: "Expiry date (optional)", type: "date", hint: "Leave blank for no expiry. An expired notice stops appearing in public listings." }, { key: "category", label: "Category (optional)", hint: "For example: Examination, Admission, Event." }, { key: "departmentSlug", label: "Department (optional)", type: "department", hint: "Choose a department by name, or keep “Institute-wide (no department)” for an institutional notice." }, { key: "summary", label: "Summary (optional)", type: "textarea", full: true }, { key: "body", label: "Notice body (text notices)", type: "textarea", full: true, hint: "Required for TEXT notices. Plain text; line breaks are preserved." }, { key: "status", label: "Workflow status", type: "status" },
+  notices: { title: "Notices", singular: "notice", description: "Notice board: text notices and PDF notices.", titleField: "title", fields: [
+    { key: "title", label: "Notice title", required: true }, { key: "noticeType", label: "Notice type", type: "select", options: ["TEXT", "PDF"], optionLabels: { TEXT: "Text notice (read on the website)", PDF: "PDF notice (opens an uploaded PDF)" } }, { key: "documentId", label: "Notice PDF", type: "asset", full: true, hint: "For a PDF notice: upload the PDF here or choose one that was uploaded earlier. When the notice is published, its PDF is made public automatically — no separate step in Documents is needed." }, { key: "noticeDate", label: "Notice date", type: "date" }, { key: "expiryDate", label: "Remove from the notice board after (optional)", type: "date", hint: "Leave blank to keep the notice listed. After this date the notice leaves the public listings." }, { key: "category", label: "Category (optional)", hint: "For example: Examination, Admission, Event." }, { key: "departmentSlug", label: "Department (optional)", type: "department", hint: "Choose a department by name, or keep “Institute-wide (no department)” for an institutional notice." }, { key: "slug", label: "Web address (optional)", hint: "Created from the title when left blank." }, { key: "summary", label: "Short summary (optional)", type: "textarea", full: true }, { key: "body", label: "Notice text (for text notices)", type: "textarea", full: true, hint: "Required for a text notice. Line breaks are kept." },
   ] },
-  organizations: { title: "Student organizations", description: "Clubs, chapters and student groups.", titleField: "name", fields: [
-    { key: "name", label: "Organization name" }, { key: "slug", label: "URL slug" }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "contactUrl", label: "Official contact URL" }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  organizations: { title: "Student organizations", singular: "student organization", description: "Clubs, chapters and student groups.", titleField: "name", fields: [
+    { key: "name", label: "Organization name", required: true }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "departmentSlug", label: "Department", type: "department" }, { key: "contactUrl", label: "Official website or contact link (optional)", hint: "Must start with http:// or https://." }, { key: "description", label: "Description", type: "textarea", full: true },
   ] },
-  pages: { title: "Pages", description: "Structured institutional pages with localized content ready for review.", titleField: "title", fields: [
-    { key: "title", label: "Page title" }, { key: "slug", label: "URL slug" }, { key: "locale", label: "Locale", hint: "Use en now; add hi after institutional review." }, { key: "excerpt", label: "Excerpt", type: "textarea" }, { key: "body", label: "Page body", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  pages: { title: "Pages", singular: "page", description: "Institutional pages such as About, Admissions and Accessibility.", titleField: "title", fields: [
+    { key: "title", label: "Page title", required: true }, { key: "slug", label: "Web address", hint: WEB_ADDRESS_HINT }, { key: "locale", label: "Language", hint: "Use “en” for English." }, { key: "excerpt", label: "Short introduction", type: "textarea" }, { key: "body", label: "Page text", type: "textarea", full: true, hint: "Plain text. Line breaks are kept." },
   ] },
-  links: { title: "Links", description: "Official university and IET resource links with clear ownership.", titleField: "label", fields: [
-    { key: "label", label: "Link label" }, { key: "url", label: "URL" }, { key: "owner", label: "Owner", hint: "DSMNRU or IET" }, { key: "order", label: "Order", type: "number" }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  links: { title: "Links", singular: "link", description: "Official university and IET resource links.", titleField: "label", fields: [
+    { key: "label", label: "Link text", required: true }, { key: "url", label: "Web address (URL)", hint: "Must start with http:// or https://." }, { key: "owner", label: "Provided by", type: "select", options: ["DSMNRU", "IET"] }, { key: "order", label: "Display order", type: "number", hint: "Lower numbers appear first." }, { key: "description", label: "Description", type: "textarea", full: true },
   ] },
-  contacts: { title: "Contacts", description: "Approved institute, department and university contact channels.", titleField: "label", fields: [
-    { key: "label", label: "Label" }, { key: "name", label: "Name" }, { key: "category", label: "Category", hint: "IET, DSMNRU or department" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "address", label: "Address", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  contacts: { title: "Contacts", singular: "contact", description: "Institute, department and university contact channels.", titleField: "label", fields: [
+    { key: "label", label: "Contact heading", required: true, hint: "For example: Faculty leadership, University contact." }, { key: "name", label: "Name / office" }, { key: "category", label: "Belongs to", hint: "IET, DSMNRU or the department name." }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "address", label: "Address", type: "textarea", full: true },
   ] },
-  settings: { title: "Site settings", description: "Institution-owned configuration values and provenance banners.", titleField: "key", fields: [
-    { key: "key", label: "Setting key" }, { key: "value", label: "Value", type: "textarea", full: true }, { key: "description", label: "Description", type: "textarea", full: true },
+  settings: { title: "Site settings", singular: "setting", description: "Institution-owned configuration values.", titleField: "key", fields: [
+    { key: "key", label: "Setting name", required: true }, { key: "value", label: "Value", type: "textarea", full: true }, { key: "description", label: "Description", type: "textarea", full: true },
   ] },
-  media: { title: "Media library", description: "Uploaded images and metadata with alt text and captions.", titleField: "key", fields: [
-    { key: "key", label: "Storage key" }, { key: "url", label: "Public / signed URL" }, { key: "mimeType", label: "MIME type" }, { key: "sizeBytes", label: "Size in bytes", type: "number" }, { key: "altText", label: "Alt text", type: "textarea", full: true }, { key: "caption", label: "Caption", type: "textarea", full: true },
+  media: { title: "Images", singular: "image", description: "Uploaded photographs and images with their descriptions.", titleField: "altText", fields: [
+    { key: "altText", label: "Description for screen readers (alternative text)", type: "textarea", full: true, required: true }, { key: "caption", label: "Caption (optional)", type: "textarea", full: true },
   ] },
-  documents: { title: "Documents", description: "PDFs and institutional documents with metadata and publication workflow.", titleField: "title", fields: [
-    { key: "title", label: "Document title" }, { key: "key", label: "Storage key" }, { key: "url", label: "Public / signed URL" }, { key: "mimeType", label: "MIME type" }, { key: "sizeBytes", label: "Size in bytes", type: "number" }, { key: "departmentSlug", label: "Department", type: "department", hint: "Department-owned documents are listed with their department; leave institute-wide for institutional PDFs." }, { key: "description", label: "Description", type: "textarea", full: true }, { key: "altText", label: "Accessible title / alt text", type: "textarea", full: true }, { key: "status", label: "Workflow status", type: "status" },
+  documents: { title: "Documents (PDF)", singular: "document", description: "Uploaded PDF documents. A PDF used by a notice is published together with the notice.", titleField: "title", fields: [
+    { key: "title", label: "Document title", required: true }, { key: "departmentSlug", label: "Department", type: "department", hint: "Department-owned documents are listed with their department; keep institute-wide for institutional PDFs." }, { key: "description", label: "Description (optional)", type: "textarea", full: true }, { key: "altText", label: "Accessible title (optional)", type: "textarea", full: true },
   ] },
 };
 
@@ -69,6 +86,38 @@ export { isEntityName } from "@/lib/content-policy";
 export type EntityRecord = Record<string, unknown> & { id?: string; status?: string };
 type FieldValue = unknown;
 const asText = (value: FieldValue) => (typeof value === "string" ? value : value === undefined || value === null ? "" : String(value));
+
+/** Plain-language status names for the workspace (the API keeps the codes). */
+export const statusLabels: Record<string, string> = { DRAFT: "Draft", REVIEW: "In review", PUBLISHED: "Published", ARCHIVED: "Archived" };
+export const statusDescriptions: Record<string, string> = {
+  DRAFT: "Not on the public website.",
+  REVIEW: "Waiting to be checked and published. Not on the public website.",
+  PUBLISHED: "Live on the public website.",
+  ARCHIVED: "Taken off the public website and kept for reference.",
+};
+
+/** Message shown after a save, by the status the record now has. */
+export function savedMessage(status: string, isExisting: boolean, previousStatus?: string) {
+  if (status === "PUBLISHED") return previousStatus === "PUBLISHED" ? "Changes saved. They are live on the public website." : "Published. The record is now on the public website.";
+  if (status === "REVIEW") return "Submitted for review. It is not public until it is published.";
+  if (status === "ARCHIVED") return "Archived. The record is no longer on the public website.";
+  if (previousStatus === "PUBLISHED") return "Unpublished. The record is no longer on the public website and is kept as a draft.";
+  if (previousStatus === "ARCHIVED") return "Restored as a draft.";
+  return isExisting ? "Draft saved." : "Draft created. It is not on the public website yet.";
+}
+
+function formatBytes(value: FieldValue) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** File name of an upload, without the internal storage path. */
+function fileName(record: EntityRecord) {
+  const key = asText(record.key);
+  return key ? key.split("/").pop() || "" : "";
+}
 
 export function EntityManager({ entity, capability }: { entity: EntityName; capability: EntityCapabilityDetail }) {
   const config = configs[entity];
@@ -107,69 +156,117 @@ export function EntityManager({ entity, capability }: { entity: EntityName; capa
       // A select always renders its first option, so the form state must start
       // there too. Leaving it empty made the browser show "TEXT" while the
       // payload carried "" and the API refused the notice.
-      blank[field.key] = field.key === "status" ? capability.createStatusOptions[0]
-        : field.key === "departmentSlug" && capability.fixedDepartmentSlug ? capability.fixedDepartmentSlug
+      blank[field.key] = field.key === "departmentSlug" && capability.fixedDepartmentSlug ? capability.fixedDepartmentSlug
         : field.type === "select" ? field.options?.[0] || ""
         : "";
     });
-    setEditing(blank); setMessage("");
+    if (entity === "notices") blank.noticeDate = new Date().toISOString().slice(0, 10);
+    setEditing(blank); setMessage(""); setError("");
   };
 
-  const save = async (values: EntityRecord) => {
+  const save = async (values: EntityRecord, action: WorkflowAction) => {
     setSaving(true); setError("");
     const isExisting = Boolean(values.id);
+    const previousStatus = isExisting ? asText(values.status) : undefined;
     // Mirrors the server's workflow and notice validation so the editor
     // explains a mistake instead of failing on submit; the API stays the
     // authority and re-validates everything.
+    const titleValue = asText(values[config.titleField]).trim();
+    const required = config.fields.find((field) => field.required && !asText(values[field.key]).trim());
+    if (required) { setSaving(false); setError(`Please fill in “${required.label}”.`); return; }
     if (entity === "notices") {
       const noticeType = asText(values.noticeType) || "TEXT";
-      if (noticeType === "PDF" && !asText(values.documentId)) { setSaving(false); setError("A PDF notice needs an uploaded PDF document. Upload one in the “PDF document” field first."); return; }
-      if (noticeType === "TEXT" && !asText(values.body).trim()) { setSaving(false); setError("A text notice needs a notice body."); return; }
+      if (noticeType === "PDF" && !asText(values.documentId)) { setSaving(false); setError("A PDF notice needs a PDF file. Upload one in the “Notice PDF” field first."); return; }
+      if (noticeType === "TEXT" && !asText(values.body).trim()) { setSaving(false); setError("A text notice needs the notice text."); return; }
     }
+    // Only the fields this editor manages are sent: internal values that came
+    // back with the record (timestamps, file details, relation objects) are
+    // never round-tripped.
+    const payload: Record<string, unknown> = { status: action.status };
+    for (const field of config.fields) if (values[field.key] !== undefined) payload[field.key] = values[field.key];
+    if (entity === "departments" && values.socialLinks !== undefined) payload.socialLinks = values.socialLinks;
+    if (config.fields.some((field) => field.key === "slug") && !asText(values.slug).trim() && titleValue) payload.slug = slugify(titleValue);
     try {
-      const response = await fetch("/api/admin/content", { method: isExisting ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entity, id: values.id, data: values }) });
+      const response = await fetch("/api/admin/content", { method: isExisting ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entity, id: values.id, data: payload }) });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "Could not save record");
-      setEditing(null); setMessage(isExisting ? "Record updated." : "Draft record created."); load();
-    } catch (error) { setError(error instanceof Error ? error.message : "Could not save record"); }
+      if (!response.ok) throw new Error(body.error || "Could not save. Please try again.");
+      setEditing(null); setMessage(savedMessage(action.status, isExisting, previousStatus)); load();
+    } catch (error) { setError(error instanceof Error ? error.message : "Could not save. Please try again."); }
     finally { setSaving(false); }
   };
 
-  const remove = async (id: string) => { if (!window.confirm("Delete this record? This action is audit logged.")) return; const response = await fetch(`/api/admin/content?entity=${entity}&id=${encodeURIComponent(id)}`, { method: "DELETE" }); const body = await response.json().catch(() => ({})); if (!response.ok) { setError(body.error || "Could not delete record"); return; } setMessage("Record deleted."); load(); };
-  const titleFor = (record: EntityRecord) => asText(record[config.titleField]) || asText(record.name) || asText(record.title) || asText(record.key) || asText(record.id);
-  const preview = (record: EntityRecord) => asText(record.overview) || asText(record.summary) || asText(record.description) || asText(record.body) || asText(record.value) || "";
+  const titleFor = (record: EntityRecord) => asText(record[config.titleField]) || asText(record.name) || asText(record.title) || asText(record.label) || fileName(record) || "(untitled)";
+  const remove = async (record: EntityRecord) => {
+    const live = record.status === "PUBLISHED" ? " It is currently on the public website and will disappear immediately." : "";
+    if (!window.confirm(`Delete “${titleFor(record)}” permanently?${live} This cannot be undone. The deletion is recorded in the audit log.`)) return;
+    const response = await fetch(`/api/admin/content?entity=${entity}&id=${encodeURIComponent(String(record.id))}`, { method: "DELETE" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) { setError(body.error || "Could not delete the record."); return; }
+    setMessage(`“${titleFor(record)}” was deleted.`); load();
+  };
+  const preview = (record: EntityRecord) => asText(record.overview) || asText(record.summary) || asText(record.description) || asText(record.body) || asText(record.value) || asText(record.caption) || "";
+  // Second line under the record name: something a person recognises, never
+  // an internal identifier.
+  const subtitle = (record: EntityRecord) => {
+    const parts = [
+      asText(record.departmentName),
+      asText(record.designation),
+      asText(record.category),
+      asText(record.level),
+      entity === "notices" ? (asText(record.noticeType) === "PDF" ? "PDF notice" : "Text notice") : "",
+      entity === "notices" && record.noticeDate ? new Date(asText(record.noticeDate)).toLocaleDateString("en-IN", { dateStyle: "medium" }) : "",
+      entity === "documents" || entity === "media" ? [fileName(record), formatBytes(record.sizeBytes)].filter(Boolean).join(" · ") : "",
+      entity === "links" ? asText(record.url) : "",
+      entity === "publications" && record.year ? asText(record.year) : "",
+    ].filter(Boolean);
+    return parts.slice(0, 2).join(" · ");
+  };
 
   return <>
     <div className="entity-toolbar">
       <div><div className="admin-breadcrumb">Content / {config.title}</div><h2>{config.title}</h2><p className="small">{config.description}</p></div>
-      {capability.canCreate && <button className="button small-button" onClick={startNew}><Plus size={15} /> New record</button>}
+      {capability.canCreate && entity !== "media" && entity !== "documents" && <button className="button small-button" onClick={startNew}><Plus size={15} /> New {config.singular}</button>}
     </div>
-    {(entity === "media" || entity === "documents") && capability.canCreate && <UploadPanel entity={entity} onDone={() => { setMessage("Upload stored and metadata record created."); load(); }} fixedDepartmentSlug={capability.fixedDepartmentSlug} departments={departments} />}
-    {!capability.canCreate && <div className="admin-panel" style={{ marginBottom: 15, background: "var(--paper-2)" }}><p className="small">Your role can review this section, but creating records in it is not part of your access. Contact an institute administrator if this is unexpected.</p></div>}
-    {error && <div className="alert">{error}</div>}{message && <div className="success">{message}</div>}
-    {loading ? <div className="admin-panel"><p className="small">Loading records…</p></div> : <>
-      <div className="admin-panel" style={{ padding: 0, overflowX: "auto" }}><table className="entity-table"><thead><tr><th>Record</th><th>Summary</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
+    {(entity === "media" || entity === "documents") && capability.canCreate && <UploadPanel entity={entity} canPublish={capability.canPublish} onDone={(published) => { setMessage(published ? "Uploaded and published. The file is available on the public website." : entity === "documents" ? "Uploaded as a draft. Publish it here, or attach it to a notice — publishing the notice publishes the PDF too." : "Image uploaded."); load(); }} fixedDepartmentSlug={capability.fixedDepartmentSlug} departments={departments} />}
+    {!capability.canCreate && <div className="admin-panel" style={{ marginBottom: 15, background: "var(--paper-2)" }}><p className="small">You can view this section, but your account cannot add records here. Contact an institute administrator if you need to.</p></div>}
+    {error && <div className="alert" role="alert">{error}</div>}{message && <div className="success" role="status">{message}</div>}
+    {loading ? <div className="admin-panel"><p className="small">Loading…</p></div> : <>
+      <div className="admin-panel" style={{ padding: 0, overflowX: "auto" }}><table className="entity-table"><thead><tr><th>Record</th><th>Summary</th><th>Status</th><th>Last updated</th><th>Actions</th></tr></thead><tbody>
         {records.map((record) => <tr key={String(record.id)}>
-          <td><strong>{titleFor(record)}</strong><br /><span className="small">{asText(record.slug) || asText(record.key) || asText(record.id)}</span></td>
+          <td><strong>{titleFor(record)}</strong>{subtitle(record) && <><br /><span className="small">{subtitle(record)}</span></>}</td>
           <td><span className="small">{preview(record).slice(0, 150)}{preview(record).length > 150 ? "…" : ""}</span></td>
-          <td>{record.status ? <span className={`status-pill ${String(record.status).toLowerCase()}`}>{String(record.status)}</span> : <span className="tag">setting</span>}</td>
-          <td><span className="small">{record.updatedAt ? new Date(asText(record.updatedAt)).toLocaleDateString("en-IN") : "seed"}</span></td>
-          <td><div className="entity-actions"><button className="mini-button" onClick={() => setEditing(normalizeForForm(record, config.fields))}>Edit</button>{capability.canDelete && <button className="mini-button danger" onClick={() => remove(String(record.id))}><Trash2 size={13} /></button>}</div></td>
+          <td>{record.status ? <span className={`status-pill ${String(record.status).toLowerCase()}`} title={statusDescriptions[String(record.status)]}>{statusLabels[String(record.status)] || String(record.status)}</span> : <span className="tag">setting</span>}</td>
+          <td><span className="small">{record.updatedAt ? new Date(asText(record.updatedAt)).toLocaleDateString("en-IN") : "—"}</span></td>
+          <td><div className="entity-actions"><button className="mini-button" onClick={() => { setError(""); setMessage(""); setEditing(normalizeForForm(record, config.fields)); }}>Edit</button>{capability.canDelete && <button className="mini-button danger" aria-label={`Delete ${titleFor(record)}`} onClick={() => remove(record)}><Trash2 size={13} /> Delete</button>}</div></td>
         </tr>)}
-        {records.length === 0 && <tr><td colSpan={5}><div className="empty-state">No records found.</div></td></tr>}
+        {records.length === 0 && <tr><td colSpan={5}><div className="admin-empty-state"><strong>No {config.title.toLowerCase()} yet</strong>{capability.canCreate ? (entity === "media" || entity === "documents" ? "Use the upload form above to add the first file." : `Use “New ${config.singular}” to add the first one.`) : "Nothing has been added here so far."}</div></td></tr>}
       </tbody></table></div>
       <div className="cta-row" style={{ marginTop: 10, justifyContent: "space-between" }}><span className="small">{total} record{total === 1 ? "" : "s"} · page {page} of {totalPages}</span><div style={{ display: "flex", gap: 8 }}><button className="button small-button secondary" disabled={page <= 1} onClick={() => load(page - 1)}>Previous</button><button className="button small-button secondary" disabled={page >= totalPages} onClick={() => load(page + 1)}>Next</button></div></div>
     </>}
-    {editing && <EditorModal entity={entity} config={config} capability={capability} departments={departments} value={editing} saving={saving} error={error} onClose={() => setEditing(null)} onSave={save} />}
+    {editing && <EditorModal entity={entity} config={config} capability={capability} departments={departments} value={editing} saving={saving} error={error} onClose={() => { setEditing(null); setError(""); }} onSave={save} />}
   </>;
 }
 
-function UploadPanel({ entity, onDone, fixedDepartmentSlug, departments }: { entity: "media" | "documents"; onDone: () => void; fixedDepartmentSlug?: string; departments: DepartmentOption[] }) {
-  const [file, setFile] = useState<File | null>(null); const [title, setTitle] = useState(""); const [altText, setAltText] = useState(""); const [caption, setCaption] = useState(""); const [status, setStatus] = useState("DRAFT"); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [departmentSlug, setDepartmentSlug] = useState(fixedDepartmentSlug || "");
-  const upload = async () => { if (!file) { setError("Choose a file first."); return; } setBusy(true); setError(""); const form = new FormData(); form.append("file", file); form.append("collection", entity); form.append("title", title || file.name); form.append("altText", altText); form.append("caption", caption); form.append("status", status); if (entity === "documents" && departmentSlug) form.append("departmentSlug", departmentSlug); const response = await fetch("/api/admin/media/upload", { method: "POST", body: form }); const body = await response.json().catch(() => ({})); setBusy(false); if (!response.ok) { setError(body.error || "Upload failed"); return; } setFile(null); setTitle(""); setAltText(""); setCaption(""); onDone(); };
-  return <div className="admin-panel" style={{ marginBottom: 15, background: "var(--paper-2)" }}><div className="admin-panel-head"><h3>Upload {entity === "media" ? "image / media" : "PDF / document"}</h3><span className="small">Demo stores locally; production uses object storage.</span></div><div className="form-grid"><div className="form-field"><label htmlFor="upload-file">File</label><input id="upload-file" className="form-control" type="file" accept={entity === "media" ? "image/png,image/jpeg,image/webp,image/gif" : "application/pdf"} onChange={(event) => setFile(event.target.files?.[0] || null)} /></div><div className="form-field"><label htmlFor="upload-title">Title</label><input id="upload-title" className="form-control" value={title} onChange={(event) => setTitle(event.target.value)} /></div><div className="form-field"><label htmlFor="upload-alt">Alt text / accessible title</label><input id="upload-alt" className="form-control" value={altText} onChange={(event) => setAltText(event.target.value)} /></div><div className="form-field"><label htmlFor="upload-caption">Caption</label><input id="upload-caption" className="form-control" value={caption} onChange={(event) => setCaption(event.target.value)} /></div>{entity === "documents" && <div className="form-field"><label htmlFor="upload-status">Workflow status</label><select id="upload-status" className="form-select" value={status} onChange={(event) => setStatus(event.target.value)}><option>DRAFT</option><option>REVIEW</option><option>PUBLISHED</option></select></div>}</div>{entity === "documents" && (fixedDepartmentSlug
-    ? <p className="form-hint">The PDF is stored for your assigned department ({departments.find((option) => option.id === fixedDepartmentSlug)?.name || fixedDepartmentSlug}).</p>
-    : <DepartmentSelect id="upload-department" label="Department" value={departmentSlug} onChange={setDepartmentSlug} options={departments} noneLabel="Institute-wide (no department)" hint="Department-owned PDFs are validated against the department you choose here." />)}{error && <div className="alert">{error}</div>}<button className="button small-button" style={{ marginTop: 14 }} onClick={upload} disabled={busy}>{busy ? "Uploading…" : "Upload and create metadata"}</button></div>;
+function UploadPanel({ entity, canPublish, onDone, fixedDepartmentSlug, departments }: { entity: "media" | "documents"; canPublish: boolean; onDone: (published: boolean) => void; fixedDepartmentSlug?: string; departments: DepartmentOption[] }) {
+  const [file, setFile] = useState<File | null>(null); const [title, setTitle] = useState(""); const [altText, setAltText] = useState(""); const [caption, setCaption] = useState(""); const [publish, setPublish] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [departmentSlug, setDepartmentSlug] = useState(fixedDepartmentSlug || "");
+  const isDocument = entity === "documents";
+  const upload = async () => {
+    if (!file) { setError(isDocument ? "Choose a PDF file first." : "Choose an image file first."); return; }
+    if (!isDocument && !altText.trim()) { setError("Describe the image for screen-reader users before uploading."); return; }
+    if (publish && !window.confirm(isDocument ? "Publish this PDF on the public website as soon as it is uploaded?" : "Publish this image as soon as it is uploaded?")) return;
+    setBusy(true); setError("");
+    const form = new FormData(); form.append("file", file); form.append("collection", entity); form.append("title", title || file.name); form.append("altText", altText); form.append("caption", caption); form.append("status", isDocument && publish && canPublish ? "PUBLISHED" : "DRAFT"); if (isDocument && departmentSlug) form.append("departmentSlug", departmentSlug);
+    const response = await fetch("/api/admin/media/upload", { method: "POST", body: form }); const body = await response.json().catch(() => ({})); setBusy(false);
+    if (!response.ok) { setError(body.error || "The upload did not work. Please try again."); return; }
+    setFile(null); setTitle(""); setAltText(""); setCaption(""); setPublish(false); onDone(isDocument && publish && canPublish);
+  };
+  return <div className="admin-panel" style={{ marginBottom: 15, background: "var(--paper-2)" }}><div className="admin-panel-head"><h3>{isDocument ? "Upload a PDF" : "Upload an image"}</h3><span className="small">{isDocument ? "PDF files up to 25 MB." : "PNG, JPEG, WebP or GIF up to 10 MB."}</span></div><div className="form-grid"><div className="form-field"><label htmlFor="upload-file">{isDocument ? "PDF file" : "Image file"}</label><input id="upload-file" className="form-control" type="file" accept={entity === "media" ? "image/png,image/jpeg,image/webp,image/gif" : "application/pdf"} onChange={(event) => setFile(event.target.files?.[0] || null)} /></div><div className="form-field"><label htmlFor="upload-title">{isDocument ? "Document title" : "Title (optional)"}</label><input id="upload-title" className="form-control" value={title} onChange={(event) => setTitle(event.target.value)} placeholder={file?.name || ""} /></div><div className="form-field"><label htmlFor="upload-alt">{isDocument ? "Accessible title (optional)" : "Description for screen readers"}</label><input id="upload-alt" className="form-control" value={altText} maxLength={300} onChange={(event) => setAltText(event.target.value)} /></div><div className="form-field"><label htmlFor="upload-caption">{isDocument ? "Description (optional)" : "Caption (optional)"}</label><input id="upload-caption" className="form-control" value={caption} maxLength={500} onChange={(event) => setCaption(event.target.value)} /></div></div>{isDocument && (fixedDepartmentSlug
+    ? <p className="form-hint">The PDF is stored for your department ({departments.find((option) => option.id === fixedDepartmentSlug)?.name || "your assigned department"}).</p>
+    : <DepartmentSelect id="upload-department" label="Department" value={departmentSlug} onChange={setDepartmentSlug} options={departments} noneLabel="Institute-wide (no department)" hint="Choose the department that owns this PDF, or keep it institute-wide." />)}
+    {isDocument && (canPublish
+      ? <label className="form-check"><input type="checkbox" checked={publish} onChange={(event) => setPublish(event.target.checked)} /> Publish this PDF on the public website immediately</label>
+      : <p className="form-hint">Uploaded PDFs are saved as drafts. A PDF attached to a notice is published together with the notice; other PDFs are published by an institute administrator.</p>)}
+    {error && <div className="alert" role="alert">{error}</div>}<button className="button small-button" style={{ marginTop: 14 }} onClick={upload} disabled={busy}>{busy ? "Uploading…" : isDocument ? "Upload PDF" : "Upload image"}</button></div>;
 }
 
 function normalizeForForm(record: EntityRecord, fields: { key: string; type?: string }[]): EntityRecord {
@@ -185,18 +282,17 @@ function normalizeForForm(record: EntityRecord, fields: { key: string; type?: st
 
 function EditorModal({ entity, config, capability, departments, value, saving, error, onClose, onSave }: {
   entity: EntityName;
-  config: (typeof configs)[EntityName];
+  config: EntityConfig;
   capability: EntityCapabilityDetail;
   departments: DepartmentOption[];
   value: EntityRecord;
   saving: boolean;
   error: string;
   onClose: () => void;
-  onSave: (value: EntityRecord) => void;
+  onSave: (value: EntityRecord, action: WorkflowAction) => void;
 }) {
   const [form, setForm] = useState(value);
   const [uploads, setUploads] = useState<Record<string, boolean>>({});
-  const [localError, setLocalError] = useState("");
   const dialog = useRef<HTMLDivElement>(null);
   const uploading = Object.values(uploads).some(Boolean);
   const set = (key: string, next: FieldValue) => setForm((current) => ({ ...current, [key]: next }));
@@ -205,9 +301,17 @@ function EditorModal({ entity, config, capability, departments, value, saving, e
     dialog.current?.focus();
     return () => previous?.focus();
   }, []);
-  const statusOptions = form.id ? capability.editStatusOptions : capability.createStatusOptions;
+  const currentStatus = form.id ? asText(form.status) || "DRAFT" : undefined;
+  // Site settings and images carry no workflow: they are simply saved.
+  const hasWorkflow = entity !== "settings" && entity !== "media";
+  const actions: WorkflowAction[] = hasWorkflow ? workflowActions(capability, currentStatus) : [{ status: "PUBLISHED", label: "Save", kind: "primary" }];
   const fixedDepartment = capability.fixedDepartmentSlug ? departments.find((option) => option.id === capability.fixedDepartmentSlug) : undefined;
-  return <div ref={dialog} tabIndex={-1} className="accessibility-panel" role="dialog" aria-modal="true" aria-label={`Edit ${config.title}`} onKeyDown={(event) => {
+  const visibleFields = config.fields.filter((field) => !(entity === "notices" && field.key === "documentId" && (asText(form.noticeType) || "TEXT") !== "PDF") && !(entity === "notices" && field.key === "body" && asText(form.noticeType) === "PDF" && !asText(form.body)));
+  const run = (action: WorkflowAction) => {
+    if (action.confirm && !window.confirm(action.confirm)) return;
+    onSave(form, action);
+  };
+  return <div ref={dialog} tabIndex={-1} className="accessibility-panel admin-editor" role="dialog" aria-modal="true" aria-label={`${form.id ? "Edit" : "New"} ${config.singular}`} onKeyDown={(event) => {
     if (event.key === "Escape" && !uploading && !saving) onClose();
     if (event.key === "Tab") {
       const controls = dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]');
@@ -216,19 +320,21 @@ function EditorModal({ entity, config, capability, departments, value, saving, e
       if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
-  }} style={{ width: "min(680px, calc(100vw - 30px))", right: 15, bottom: 15, top: 15, overflowY: "auto" }}>
+  }}>
     <button className="panel-close" aria-label="Close editor" disabled={uploading || saving} onClick={onClose}><X size={17} /></button>
-    <div className="eyebrow">{form.id ? "Edit record" : "New draft"}</div><h2>{config.title}</h2>
+    <div className="eyebrow">{form.id ? `Edit ${config.singular}` : `New ${config.singular}`}</div><h2>{config.title}</h2>
+    {hasWorkflow && <p className="editor-status">{currentStatus
+      ? <><span className={`status-pill ${currentStatus.toLowerCase()}`}>{statusLabels[currentStatus] || currentStatus}</span> <span className="small">{statusDescriptions[currentStatus]}</span></>
+      : <span className="small">New records are not on the public website until they are published.</span>}</p>}
     {error && <div className="alert" role="alert">{error}</div>}
-    {localError && <div className="alert" role="alert">{localError}</div>}
-    <div className="form-grid">{config.fields.map((field) => <div className={`form-field ${field.full ? "full" : ""}`} key={field.key}>
-      <label htmlFor={`field-${field.key}`}>{field.label}</label>
+    {(entity === "documents" || entity === "media") && form.id && <p className="form-hint file-summary"><strong>File:</strong> {fileName(form) || "uploaded file"}{formatBytes(form.sizeBytes) ? ` · ${formatBytes(form.sizeBytes)}` : ""}{entity === "documents" && form.status === "PUBLISHED" && asText(form.url) && <> · <a href={asText(form.url)} target="_blank" rel="noopener noreferrer">Open PDF</a></>}</p>}
+    <div className="form-grid">{visibleFields.map((field) => <div className={`form-field ${field.full ? "full" : ""}`} key={field.key}>
+      {!(field.type === "department" && !capability.fixedDepartmentSlug) && <label htmlFor={`field-${field.key}`}>{field.label}{field.required && <span aria-hidden="true"> *</span>}</label>}
       {field.type === "asset" ? <AssetPicker fieldKey={field.key} value={asText(form[field.key])} departmentSlug={asText(form.departmentSlug)} onChange={(next) => set(field.key, next)} onBusyChange={(busy) => setUploads((current) => ({ ...current, [field.key]: busy }))} />
         : field.type === "textarea" ? <textarea id={`field-${field.key}`} className="form-textarea" value={asText(form[field.key])} onChange={(event) => set(field.key, event.target.value)} />
-        : field.type === "select" ? <select id={`field-${field.key}`} className="form-select" value={asText(form[field.key]) || field.options?.[0] || ""} onChange={(event) => set(field.key, event.target.value)}>{field.options?.map((option) => <option key={option}>{option}</option>)}</select>
-        : field.type === "status" ? <select id={`field-${field.key}`} className="form-select" value={asText(form[field.key]) || statusOptions[0]} onChange={(event) => set(field.key, event.target.value)}>{statusOptions.map((option) => <option key={option}>{option}</option>)}</select>
+        : field.type === "select" ? <select id={`field-${field.key}`} className="form-select" value={asText(form[field.key]) || field.options?.[0] || ""} onChange={(event) => set(field.key, event.target.value)}>{field.options?.map((option) => <option key={option} value={option}>{field.optionLabels?.[option] || option}</option>)}</select>
         : field.type === "department" ? (capability.fixedDepartmentSlug
-          ? <input id={`field-${field.key}`} className="form-control" value={fixedDepartment?.name || capability.fixedDepartmentSlug} readOnly aria-describedby={`field-${field.key}-hint`} />
+          ? <input id={`field-${field.key}`} className="form-control" value={fixedDepartment?.name || "Your department"} readOnly aria-describedby={`field-${field.key}-hint`} />
           : <><DepartmentSelect
               id={`field-${field.key}`}
               label={field.label}
@@ -239,11 +345,15 @@ function EditorModal({ entity, config, capability, departments, value, saving, e
             /></>)
         : <input id={`field-${field.key}`} className="form-control" type={field.type === "number" ? "number" : field.type === "date" ? "date" : field.key === "cvUrl" ? "url" : "text"} value={asText(form[field.key])} onChange={(event) => set(field.key, event.target.value)} />}
       {field.hint && <div className="form-hint">{field.hint}</div>}
-      {field.type === "status" && <div className="form-hint">{form.id ? "Workflow: Draft → Review → Publish → Archive." : "New records start as drafts."}</div>}
-      {field.type === "department" && capability.fixedDepartmentSlug && <div className="form-hint" id={`field-${field.key}-hint`}>Your account is scoped to this department, so {entity === "notices" ? "the notice" : "the record"} is associated with it automatically.</div>}
+      {field.type === "department" && capability.fixedDepartmentSlug && <div className="form-hint" id={`field-${field.key}-hint`}>Your account belongs to this department, so {entity === "notices" ? "the notice" : "the record"} is filed under it automatically.</div>}
     </div>)}</div>
     {entity === "departments" && <SocialLinksEditor value={form.socialLinks} onChange={(links) => set("socialLinks", links)} />}
-    <div className="form-actions"><button className="button secondary small-button" disabled={uploading || saving} onClick={onClose}>Cancel</button><button className="button small-button" disabled={saving || uploading} onClick={() => { setLocalError(""); onSave(form); }}><Save size={14} /> {saving ? "Saving…" : uploading ? "Uploading…" : "Save record"}</button></div>
+    {actions.length === 0 && <div className="alert" role="note">{currentStatus === "ARCHIVED" ? "This record is archived. An institute administrator can restore it as a draft." : "Your account cannot change this record."}</div>}
+    {actions.some((action) => action.description) && <ul className="form-hint editor-action-notes">{actions.filter((action) => action.description).map((action) => <li key={action.status}><strong>{action.label}:</strong> {action.description}</li>)}</ul>}
+    <div className="form-actions">
+      <button className="button secondary small-button" disabled={uploading || saving} onClick={onClose}>Cancel</button>
+      {actions.map((action) => <button key={`${action.status}-${action.label}`} className={`button small-button${action.kind === "secondary" ? " secondary" : ""}`} disabled={saving || uploading} onClick={() => run(action)}>{action.kind === "primary" && <Save size={14} />} {saving ? "Saving…" : uploading ? "Uploading…" : action.label}</button>)}
+    </div>
   </div>;
 }
 
@@ -287,11 +397,11 @@ function AssetPicker({ fieldKey, value, departmentSlug, onChange, onBusyChange }
       do {
         const response = await fetch(`/api/admin/content?entity=${collection}&page=${page}&limit=100`);
         const body = await response.json();
-        if (!response.ok) throw new Error(body.error || "Unable to load library.");
+        if (!response.ok) throw new Error(body.error || "Unable to load the list.");
         rows.push(...body.records); totalPages = body.totalPages; page++;
       } while (page <= totalPages);
       setRecords(rows);
-    } catch (error) { setError(error instanceof Error ? error.message : "Unable to load library."); }
+    } catch (error) { setError(error instanceof Error ? error.message : "Unable to load the list."); }
   };
   useEffect(() => { void load(); }, [collection]);
   const upload = async (file?: File) => {
@@ -299,25 +409,31 @@ function AssetPicker({ fieldKey, value, departmentSlug, onChange, onBusyChange }
     setBusy(true); onBusyChange(true); setError("");
     try {
       const alt = collection === "media" ? altText.trim() : file.name;
-      if (!alt) { setError("Enter alternative text before uploading a photograph."); return; }
+      if (!alt) { setError("Describe the photograph for screen-reader users before uploading it."); return; }
       const form = new FormData(); form.append("file", file); form.append("collection", collection); form.append("altText", alt); form.append("title", file.name); form.append("status", "DRAFT");
       if (departmentSlug) form.append("departmentSlug", departmentSlug);
       const response = await fetch("/api/admin/media/upload", { method: "POST", body: form });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "Upload failed.");
+      if (!response.ok) throw new Error(body.error || "The upload did not work. Please try again.");
       await load(); onChange(body.record.id);
-    } catch (error) { setError(error instanceof Error ? error.message : "Upload failed."); }
+    } catch (error) { setError(error instanceof Error ? error.message : "The upload did not work. Please try again."); }
     finally { setBusy(false); onBusyChange(false); }
   };
+  const optionLabel = (row: EntityRecord) => {
+    const name = asText(row.title) || asText(row.name) || asText(row.altText) || fileName(row) || "Untitled";
+    return row.status && collection !== "organizations" ? `${name} (${(statusLabels[String(row.status)] || String(row.status)).toLowerCase()})` : name;
+  };
+  const chooseLabel = collection === "media" ? "Choose a photograph that was uploaded earlier" : collection === "documents" ? "Choose a PDF that was uploaded earlier" : "Choose a student organization";
   return <div>
-    <select id={`field-${fieldKey}`} className="form-select" value={value} onChange={(event) => onChange(event.target.value)}>
-      <option value="">None</option>
-      {value && !records.some((row) => row.id === value) && <option value={value}>Current selection (unavailable in this library)</option>}
-      {records.map((row) => <option key={String(row.id)} value={String(row.id)}>{asText(row.title) || asText(row.name) || asText(row.altText) || asText(row.key)}{row.status ? ` · ${asText(row.status)}` : ""}</option>)}
+    <select id={`field-${fieldKey}`} className="form-select" aria-label={chooseLabel} value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">{collection === "organizations" ? "None" : "None selected"}</option>
+      {value && !records.some((row) => row.id === value) && <option value={value}>Current selection (not available in this list)</option>}
+      {records.map((row) => <option key={String(row.id)} value={String(row.id)}>{optionLabel(row)}</option>)}
     </select>
-    {collection === "media" && <><label className="form-hint" htmlFor="photo-alt">Alternative text for a new photograph</label><input id="photo-alt" className="form-control" value={altText} maxLength={300} placeholder="Portrait of Dr. …" onChange={(event) => setAltText(event.target.value)} /></>}
-    {collection !== "organizations" && <><label className="form-hint" htmlFor={`upload-${fieldKey}`}>Or upload {collection === "media" ? "a photograph" : "a PDF"}</label><input id={`upload-${fieldKey}`} type="file" disabled={busy} accept={collection === "media" ? "image/png,image/jpeg,image/webp,image/gif" : "application/pdf"} onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ""; }} /></>}
-    {collection === "documents" && <p className="form-hint">New PDFs are drafts. Publish the document in Documents before it appears on the public profile.</p>}
+    {collection === "media" && <><label className="form-hint" htmlFor="photo-alt">Description of a new photograph (for screen readers)</label><input id="photo-alt" className="form-control" value={altText} maxLength={300} placeholder="Portrait of Dr. …" onChange={(event) => setAltText(event.target.value)} /></>}
+    {collection !== "organizations" && <><label className="form-hint" htmlFor={`upload-${fieldKey}`}>{collection === "media" ? "Or upload a new photograph" : "Or upload a new PDF"}</label><input id={`upload-${fieldKey}`} type="file" disabled={busy} accept={collection === "media" ? "image/png,image/jpeg,image/webp,image/gif" : "application/pdf"} onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ""; }} /></>}
+    {collection === "documents" && fieldKey === "documentId" && <p className="form-hint">A newly uploaded PDF is kept private until this notice is published. Publishing the notice makes the PDF public as well.</p>}
+    {collection === "documents" && fieldKey === "cvDocumentId" && <p className="form-hint">A newly uploaded CV is kept private until an institute administrator publishes it in Documents.</p>}
     {busy && <p role="status">Uploading…</p>}{error && <p role="alert">{error}</p>}
   </div>;
 }

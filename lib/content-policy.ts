@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { UserRole } from "@/lib/auth";
-import type { EntityName } from "@/lib/types";
+import type { ContentStatus, EntityName } from "@/lib/types";
 
 export const entityValues = ["departments", "programs", "faculty", "laboratories", "researchAreas", "projects", "publications", "achievements", "events", "notices", "organizations", "pages", "links", "contacts", "settings", "media", "documents"] as const;
 export const entitySchema = z.enum(entityValues);
@@ -109,35 +109,73 @@ export function isDocumentCollectionKey(key: unknown): boolean {
  */
 export function canAccess(user: PolicyUser, entity: EntityName, action: "read" | "write" | "delete", payload?: Record<string, unknown>, current?: RecordSnapshot, assignedDepartmentSlug?: string): boolean {
   if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") return true;
-  if (user.role === "EDITOR") return action !== "delete" && current?.status !== "PUBLISHED" && current?.status !== "ARCHIVED" && payload?.status !== "PUBLISHED" && payload?.status !== "ARCHIVED";
+  if (user.role === "EDITOR") {
+    // Editing authority is separate from publishing authority: an editor may
+    // update any record in the institution-wide scope — published records
+    // included, the saved text goes live — but cannot change a record's
+    // publication state (publish, unpublish or archive) and never deletes.
+    if (action === "delete") return false;
+    return action === "read" || editorialWriteAllowed(payload, current);
+  }
   if (user.role === "DEPARTMENT_ADMIN") {
     if (!departmentScoped.has(entity) || action === "delete" || !user.departmentId) return false;
     const currentDepartment = current?.departmentSlug;
     const requestedDepartment = payload?.departmentSlug === undefined ? currentDepartment : payload.departmentSlug;
     if (!assignedDepartmentSlug || requestedDepartment !== assignedDepartmentSlug || (currentDepartment && currentDepartment !== assignedDepartmentSlug)) return false;
-    if (payload?.status === "PUBLISHED" || payload?.status === "ARCHIVED" || current?.status === "PUBLISHED") return false;
-    return true;
+    // Same rule as for editors, limited to the assigned department: published
+    // records of the department stay editable, publication state does not.
+    return action === "read" || editorialWriteAllowed(payload, current);
   }
   return false;
 }
 
 /**
- * DRAFT → REVIEW → PUBLISHED → ARCHIVED workflow enforcement. Only
- * SUPER_ADMIN / IET_ADMIN may publish (REVIEW → PUBLISHED), archive
- * (PUBLISHED → ARCHIVED) or reopen (ARCHIVED → DRAFT). Every record must be
- * created as DRAFT.
+ * Write rule for the two non-publishing roles (EDITOR, DEPARTMENT_ADMIN):
+ * - archived records are read-only (an institute administrator restores them);
+ * - the publication state can only be kept, never changed: a request may carry
+ *   PUBLISHED only when the record is already published, and may never carry
+ *   ARCHIVED;
+ * - everything else (drafts, records in review, and the content of published
+ *   records) may be edited.
+ */
+function editorialWriteAllowed(payload?: Record<string, unknown>, current?: RecordSnapshot): boolean {
+  const currentStatus = current ? String(current.status || "DRAFT") : undefined;
+  if (currentStatus === "ARCHIVED") return false;
+  const requested = payload?.status === undefined || payload?.status === "" ? undefined : String(payload.status);
+  if (requested === "ARCHIVED") return false;
+  if (requested === "PUBLISHED") return currentStatus === "PUBLISHED";
+  // A published record stays published: an editor cannot take it offline.
+  if (currentStatus === "PUBLISHED" && requested !== undefined && requested !== "PUBLISHED") return false;
+  return true;
+}
+
+/** Roles that publish, unpublish and archive content directly. */
+export function canPublish(user: PolicyUser): boolean {
+  return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
+}
+
+/**
+ * Workflow enforcement. Publication no longer requires a separate approval
+ * step: a role with publishing authority (SUPER_ADMIN / IET_ADMIN) publishes a
+ * draft directly — DRAFT → PUBLISHED — and REVIEW is an optional stage that
+ * any writer may enter (DRAFT → REVIEW) or leave again (REVIEW → DRAFT).
+ * Publishing, unpublishing (PUBLISHED → DRAFT), archiving and restoring an
+ * archived record stay with the publishing roles. New records may be created
+ * as DRAFT or REVIEW by any writer, and as PUBLISHED by a publishing role.
  */
 export function workflowTransitionAllowed(user: PolicyUser, current: RecordSnapshot, requested: unknown): boolean {
   if (requested === undefined) return true;
   const next = String(requested);
   const previous = current ? String(current.status || "DRAFT") : undefined;
   if (!statusValues.has(next)) return false;
-  if (!previous) return next === "DRAFT";
+  const publisher = canPublish(user);
+  if (!previous) return next === "DRAFT" || next === "REVIEW" || (next === "PUBLISHED" && publisher);
   if (next === previous) return true;
   if (previous === "DRAFT" && next === "REVIEW") return true;
-  if (previous === "REVIEW" && next === "PUBLISHED") return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
-  if (previous === "PUBLISHED" && next === "ARCHIVED") return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
-  if (previous === "ARCHIVED" && next === "DRAFT") return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
+  if (previous === "REVIEW" && next === "DRAFT") return true;
+  if ((previous === "DRAFT" || previous === "REVIEW") && next === "PUBLISHED") return publisher;
+  if (previous === "PUBLISHED" && (next === "DRAFT" || next === "ARCHIVED")) return publisher;
+  if (previous === "ARCHIVED" && next === "DRAFT") return publisher;
   return false;
 }
 
@@ -359,7 +397,9 @@ export function canPublishInstitutionWideNotice(user: PolicyUser): boolean {
 export type EntityCapabilityDetail = {
   canCreate: boolean;
   canDelete: boolean;
-  /** Statuses the CMS may offer when creating a record (policy: always DRAFT). */
+  /** Whether the role publishes, unpublishes and archives directly. */
+  canPublish: boolean;
+  /** Statuses the CMS may offer when creating a record. */
   createStatusOptions: string[];
   /** Statuses the CMS may offer when editing an existing record. */
   editStatusOptions: string[];
@@ -375,19 +415,82 @@ export type EntityCapabilityDetail = {
 export function entityCapability(user: PolicyUser, entity: EntityName, assignedDepartmentSlug?: string): EntityCapabilityDetail {
   const everyStatus = ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"];
   if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") {
-    return { canCreate: true, canDelete: true, createStatusOptions: ["DRAFT"], editStatusOptions: everyStatus };
+    return { canCreate: true, canDelete: true, canPublish: true, createStatusOptions: ["DRAFT", "REVIEW", "PUBLISHED"], editStatusOptions: everyStatus };
   }
   if (user.role === "EDITOR") {
-    return { canCreate: true, canDelete: false, createStatusOptions: ["DRAFT"], editStatusOptions: ["DRAFT", "REVIEW"] };
+    return { canCreate: true, canDelete: false, canPublish: false, createStatusOptions: ["DRAFT", "REVIEW"], editStatusOptions: ["DRAFT", "REVIEW"] };
   }
   if (user.role === "DEPARTMENT_ADMIN" && user.departmentId && departmentScoped.has(entity)) {
     return {
       canCreate: true,
       canDelete: false,
-      createStatusOptions: ["DRAFT"],
+      canPublish: false,
+      createStatusOptions: ["DRAFT", "REVIEW"],
       editStatusOptions: ["DRAFT", "REVIEW"],
       ...(assignedDepartmentSlug ? { fixedDepartmentSlug: assignedDepartmentSlug } : {}),
     };
   }
-  return { canCreate: false, canDelete: false, createStatusOptions: ["DRAFT"], editStatusOptions: ["DRAFT"] };
+  return { canCreate: false, canDelete: false, canPublish: false, createStatusOptions: ["DRAFT"], editStatusOptions: ["DRAFT"] };
+}
+
+/** One button the editor offers; `status` is what the request will carry. */
+export type WorkflowAction = {
+  status: ContentStatus;
+  label: string;
+  /** Primary = the default action for this state; secondary = alternative. */
+  kind: "primary" | "secondary";
+  /** Ask for confirmation before performing a change with public effect. */
+  confirm?: string;
+  /** Plain-language explanation shown next to the buttons. */
+  description?: string;
+};
+
+/**
+ * Simple workflow controls for non-technical staff, derived from the same
+ * policy `workflowTransitionAllowed`/`canAccess` enforce on the server:
+ *
+ * - new record: Save as draft · Publish (publishing roles) · Submit for review
+ * - draft: Save draft · Publish · Submit for review
+ * - in review: Save changes · Publish · Return to draft
+ * - published: Save changes (changes go live) · Unpublish (publishing roles)
+ * - archived: Restore as draft (publishing roles); read-only otherwise
+ *
+ * Every action returned here is accepted by the server for the same role and
+ * state (see tests/workflow-actions.test.ts).
+ */
+export function workflowActions(capability: Pick<EntityCapabilityDetail, "canPublish" | "canCreate">, currentStatus?: string | null): WorkflowAction[] {
+  const status = currentStatus ? String(currentStatus) : undefined;
+  const publisher = capability.canPublish;
+  if (!status) {
+    if (!capability.canCreate) return [];
+    return [
+      { status: "DRAFT", label: "Save as draft", kind: publisher ? "secondary" : "primary", description: "Drafts are not shown on the public website." },
+      ...(publisher ? [{ status: "PUBLISHED", label: "Publish", kind: "primary", confirm: "Publish this record on the public website now?", description: "Publishing makes the record visible to the public immediately." } as WorkflowAction] : []),
+      { status: "REVIEW", label: "Submit for review", kind: "secondary", description: publisher ? "Optional: mark the record as ready for another administrator to check." : "Marks the record as ready for an institute administrator to publish." },
+    ];
+  }
+  if (status === "DRAFT") {
+    return [
+      { status: "DRAFT", label: "Save draft", kind: publisher ? "secondary" : "primary" },
+      ...(publisher ? [{ status: "PUBLISHED", label: "Publish", kind: "primary", confirm: "Publish this record on the public website now?", description: "Publishing makes the record visible to the public immediately." } as WorkflowAction] : []),
+      { status: "REVIEW", label: "Submit for review", kind: "secondary", description: publisher ? "Optional: mark the record as ready for another administrator to check." : "Marks the record as ready for an institute administrator to publish." },
+    ];
+  }
+  if (status === "REVIEW") {
+    return [
+      { status: "REVIEW", label: "Save changes", kind: publisher ? "secondary" : "primary", description: "The record stays in review and is not public yet." },
+      ...(publisher ? [{ status: "PUBLISHED", label: "Publish", kind: "primary", confirm: "Publish this record on the public website now?" } as WorkflowAction] : []),
+      { status: "DRAFT", label: "Return to draft", kind: "secondary" },
+    ];
+  }
+  if (status === "PUBLISHED") {
+    return [
+      { status: "PUBLISHED", label: "Save changes", kind: "primary", description: "This record is live: saved changes appear on the public website immediately." },
+      ...(publisher ? [{ status: "DRAFT", label: "Unpublish", kind: "secondary", confirm: "Remove this record from the public website? It is kept as a draft and can be published again later.", description: "Unpublishing removes the record from the public website and keeps it as a draft." } as WorkflowAction] : []),
+    ];
+  }
+  if (status === "ARCHIVED") {
+    return publisher ? [{ status: "DRAFT", label: "Restore as draft", kind: "primary", description: "Archived records are not public. Restoring makes the record an editable draft again." }] : [];
+  }
+  return [];
 }

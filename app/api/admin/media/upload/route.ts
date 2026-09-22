@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPrisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
+import { canPublish } from "@/lib/content-policy";
 import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
 import { deleteObject, describeStorageError, objectUrl, putObject, randomObjectKey, validateMagicBytes, validateUpload } from "@/lib/storage";
 import { upsertEntity } from "@/lib/store";
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
       if (!department || department.slug !== departmentSlug) return NextResponse.json({ error: "Department ownership check failed." }, { status: 403 });
     }
     const status = String(form.get("status") || "DRAFT");
-    if ((user.role === "EDITOR" || user.role === "DEPARTMENT_ADMIN") && ["PUBLISHED", "ARCHIVED"].includes(status)) return NextResponse.json({ error: "This role cannot publish or archive uploads." }, { status: 403 });
+    if (!canPublish(user) && ["PUBLISHED", "ARCHIVED"].includes(status)) return NextResponse.json({ error: "Your role can upload a PDF as a draft. It becomes public when the notice that uses it is published, or when an institute administrator publishes it in Documents." }, { status: 403 });
 
     const key = randomObjectKey(collection, file.name);
     const stored = await putObject({ key, body: buffer, contentType: file.type });
