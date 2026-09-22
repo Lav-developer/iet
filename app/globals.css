@@ -558,6 +558,8 @@ p { margin: 0 0 15px; }
 /* Fee structure (public): full tables on desktop, horizontal scroll inside the wrapper on small screens. */
 .fee-jump-links { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 8px; }
 .fee-programme { margin-top: 34px; }
+.fee-programme-subtitle { margin: 6px 0 0; font-weight: 700; color: var(--ink-2); }
+.fee-programme-note { margin: 0 0 18px; }
 .fee-tables { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; }
 .fee-table-block { min-width: 0; max-width: 100%; }
 .fee-table-title { margin: 0 0 10px; font-size: 1.05rem; letter-spacing: .04em; }
@@ -575,5 +577,5 @@ p { margin: 0 0 15px; }
 .fee-table .fee-semester { color: var(--muted); }
 .fee-table tbody th[scope="row"] { text-align: left; font-weight: 800; background: transparent; font-size: .83rem; text-transform: none; letter-spacing: 0; color: var(--ink); }
 .fee-table .fee-total td, .fee-table .fee-total th, .fee-table tbody .fee-total th[scope="row"] { font-weight: 800; background: var(--paper-2); border-top: 2px solid var(--ink); }
-.fee-table td:nth-child(2), .fee-table tbody th[scope="row"] { min-width: 11rem; }
+.fee-table .fee-details, .fee-table tbody th[scope="row"] { min-width: 11rem; }
 .fee-table td[rowspan] { vertical-align: middle; }

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { FeeTable } from "../components/fee-table";
-import { FEE_SOURCE_NOTE, btechFeeStructure, feeStructures, mtechFeeStructure } from "../lib/fee-structure";
+import { FEE_SOURCE_NOTE, MTECH_PRESENTATION_NOTE, btechFeeStructure, feeStructures, mtechFeeSource, mtechFeeStructure } from "../lib/fee-structure";
 import FeeStructurePage from "../app/(public)/admissions/fee-structure/page";
 
 Object.assign(globalThis, { React });
@@ -16,6 +16,7 @@ Object.assign(globalThis, { React });
  */
 
 const total = (rows: { total?: boolean; amounts: string[] }[]) => rows.find((row) => row.total)?.amounts;
+const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/'/g, "&#x27;").replace(/"/g, "&quot;");
 const rowAmounts = (rows: { details: string; amounts: string[] }[], details: string) => rows.find((row) => row.details === details)?.amounts;
 
 test("B.Tech (Under Self Finance Scheme): eight semester tables with the printed columns", () => {
@@ -71,9 +72,10 @@ test("B.Tech even semesters (II, IV, VI, VIII) and odd semesters (III, V, VII) m
   }
 });
 
-test("M.Tech: the printed nine-column structure, values and totals (including 6805 for Disabled odd semesters)", () => {
-  const table = mtechFeeStructure.tables[0];
+test("M.Tech source transcription: the printed nine-column structure, values and totals (including 6805 for Disabled odd semesters)", () => {
+  const table = mtechFeeSource;
   assert.equal(mtechFeeStructure.title, "Fee Structure of M.Tech");
+  assert.equal(table.title, "Fee Structure of M.Tech");
   assert.deepEqual(table.columns.map((column) => [column.group || "", column.label]), [
     ["", "Sl.No."],
     ["", "Details"],
@@ -105,13 +107,13 @@ test("M.Tech: the printed nine-column structure, values and totals (including 68
 });
 
 test("the table component renders grouped headers, rowSpans and a scrollable wrapper without inventing cells", () => {
-  const markup = renderToStaticMarkup(React.createElement(FeeTable, { table: mtechFeeStructure.tables[0] }));
+  const markup = renderToStaticMarkup(React.createElement(FeeTable, { table: mtechFeeSource }));
   assert.match(markup, /<th scope="colgroup" colSpan="3"[^>]*>Gen\/OBC\/SC\/ST \(Rs\.\)<\/th>/);
   assert.match(markup, /<th scope="colgroup" colSpan="3"[^>]*>Disabled \(Rs\.\)<\/th>/);
   assert.match(markup, /<th scope="col" rowSpan="2"[^>]*>Sl\.No\.<\/th>/);
   assert.match(markup, /<th scope="col" rowSpan="2"[^>]*>Semester<\/th>/);
   assert.match(markup, /<td class="fee-semester" rowSpan="2">Per Semester<\/td>/);
-  assert.match(markup, /class="table-wrap fee-table-wrap" role="region" aria-labelledby="mtech-fee-structure-caption" tabindex="0"/);
+  assert.match(markup, /class="table-wrap fee-table-wrap" role="region" aria-labelledby="mtech-fee-source-caption" tabindex="0"/);
   assert.match(markup, /<th scope="row">Total Amount<\/th>/);
   assert.equal((markup.match(/<td class="numeric">6805<\/td>/g) || []).length, 1);
   // Row cell counts: 9 columns per data row (merged rows carry 8 cells).
@@ -130,9 +132,10 @@ test("the public page shows both programmes, the exact source note and no unsupp
   assert.equal(FEE_SOURCE_NOTE, "Fee structure reproduced from the IET-DSMNRU institutional fee structure document. Students should refer to the latest university notice for current applicable fees.");
   assert.ok(markup.includes(FEE_SOURCE_NOTE), "the source note is printed");
   assert.match(markup, /class="source-note"/);
-  assert.doesNotMatch(markup, /approx|estimated|latest fees|currently applicable fees are|guaranteed|accredit/i);
+  assert.ok(markup.includes(escapeHtml(MTECH_PRESENTATION_NOTE)), "the M.Tech mapping note is printed");
+  assert.doesNotMatch(markup, /approx|estimated|latest fees|currently applicable fees are|guaranteed|accredit|corrected/i);
   assert.equal(feeStructures.length, 2);
-  for (const table of [...btechFeeStructure.tables, ...mtechFeeStructure.tables]) assert.ok(markup.includes(`id="${table.id}-caption"`) || markup.includes(`aria-labelledby="mtech-heading"`), table.id);
+  for (const table of [...btechFeeStructure.tables, ...mtechFeeStructure.tables]) assert.ok(markup.includes(`id="${table.id}-caption"`), table.id);
   // Every semester heading appears exactly once.
   for (const title of ["I-SEMESTER", "II-SEMESTER", "III-SEMESTER", "IV-SEMESTER", "V-SEMESTER", "VI-SEMESTER", "VII-SEMESTER", "VIII-SEMESTER"]) {
     assert.equal((markup.match(new RegExp(`>${title}<`, "g")) || []).length, 1, title);

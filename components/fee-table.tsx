@@ -1,14 +1,15 @@
 import type { FeeTable as FeeTableData } from "@/lib/fee-structure";
 
 /**
- * One fee table, printed the way the source prints it: a full table on
- * desktop, and the same table inside a horizontally scrollable wrapper on
- * small screens (the page itself never overflows). Grouped headers (M.Tech)
- * use two header rows with scope attributes; merged "Semester" cells keep
- * their rowSpan.
+ * One fee table: a full table on desktop, and the same table inside a
+ * horizontally scrollable wrapper on small screens (the page itself never
+ * overflows). Grouped headers use two header rows with scope attributes;
+ * merged "Semester"/"Payable" cells keep their rowSpan; the serial column is
+ * rendered only for tables that carry one.
  */
 export function FeeTable({ table, headingLevel = 3, labelledBy }: { table: FeeTableData; headingLevel?: 3 | 4; /** Id of an existing heading that names the table (no heading of its own is rendered). */ labelledBy?: string }) {
   const groups = table.columns.some((column) => column.group);
+  const serialColumn = table.serialColumn !== false;
   const captionId = labelledBy || `${table.id}-caption`;
   const Heading = headingLevel === 4 ? "h4" : "h3";
   // Header groups, in order, with the number of columns each spans.
@@ -39,8 +40,8 @@ export function FeeTable({ table, headingLevel = 3, labelledBy }: { table: FeeTa
         </thead>
         <tbody>
           {table.rows.map((row, rowIndex) => <tr key={`${table.id}-${rowIndex}`} className={row.total ? "fee-total" : undefined}>
-            <td className="fee-serial">{row.serial || ""}</td>
-            {row.total ? <th scope="row">{row.details}</th> : <td>{row.details}</td>}
+            {serialColumn && <td className="fee-serial">{row.serial || ""}</td>}
+            {row.total ? <th scope="row">{row.details}</th> : <td className="fee-details">{row.details}</td>}
             {row.amounts.map((amount, index) => <td key={index} className="numeric">{amount}</td>)}
             {row.semesterMerged ? null : <td className="fee-semester" rowSpan={row.semesterRowSpan}>{row.semester || ""}</td>}
           </tr>)}
