@@ -429,6 +429,7 @@ p { margin: 0 0 15px; }
 .entity-table th, .entity-table td { border-bottom: 1px solid var(--line); padding: 12px 10px; text-align: left; font-size: .78rem; vertical-align: top; }
 .entity-table th { font-size: .65rem; color: var(--muted); text-transform: uppercase; letter-spacing: .09em; }
 .entity-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.account-locked { display: inline-block; max-width: 220px; line-height: 1.35; }
 .mini-button { border: 1px solid var(--line); background: var(--paper); padding: 7px 9px; font-size: .7rem; font-weight: 800; color: var(--ink); }
 .mini-button:hover { border-color: var(--ink); background: var(--ink); color: white; }
 .mini-button.danger:hover { background: var(--danger); border-color: var(--danger); }

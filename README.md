@@ -154,8 +154,8 @@ The local preview can opt into an explicitly configured file-backed store, but p
 
 ## Roles
 
-- **Super Admin**: full platform access.
-- **IET Administrator**: institute-wide content, users, settings and publishing.
+- **Super Admin**: full platform access; the only role that can create, change or deactivate super administrator accounts.
+- **IET Administrator**: institute-wide content, users, settings and publishing. Manages IET administrator, department administrator and editor accounts; cannot view an editor for, change the role or password of, or deactivate a super administrator, and cannot grant super administrator access. No account can change its own role or deactivate itself.
 - **Department Administrator**: department-scoped academic content; should be assigned a department in the database.
 - **Editor**: create/edit working records; publishing and destructive permissions can be restricted further during institutional configuration.
 

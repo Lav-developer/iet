@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { issueSessionToken, verifySessionToken } from "../lib/auth";
-import { adminRolesFor, canActOnAccount, canDeactivateAccount, canGrantRole } from "../lib/user-roles";
+import { adminRolesFor, authorizeAccountDeactivation, authorizeAccountUpdate, canActOnAccount, canDeactivateAccount, canGrantRole } from "../lib/user-roles";
 
 process.env.AUTH_SECRET = "test-auth-secret-0123456789abcdef";
 
@@ -55,10 +55,18 @@ test("session invalidation compares the token version with the stored version", 
 });
 
 test("self-deactivation is refused by both write paths, and the screen does not offer it", () => {
-  assert.match(deleteHandler, /target\.id === actor\.id/);
-  assert.match(patchHandler, /target\.id === actor\.id && body\.data\.active === false/);
+  // Both write paths run the shared account decision on the stored target
+  // before writing; that decision refuses an actor deactivating itself.
+  assert.match(deleteHandler, /const decision = authorizeAccountDeactivation\(actor, target\);\s*if \(!decision\.ok\) return refusal\(decision\);/);
+  assert.match(patchHandler, /const decision = authorizeAccountUpdate\(actor, target, body\.data\);\s*if \(!decision\.ok\) return refusal\(decision\);/);
+  const self = { id: "u-super", role: "SUPER_ADMIN" };
+  assert.equal(authorizeAccountDeactivation(self, self).ok, false);
+  assert.deepEqual(authorizeAccountUpdate(self, self, { active: false }), { ok: false, status: 400, error: "Use sign out instead of deactivating your current account." });
+  assert.deepEqual(authorizeAccountUpdate(self, self, { active: true, name: "Still me" }), { ok: true });
+  const rowActions = readFileSync("components/account-actions.tsx", "utf8");
+  assert.match(rowActions, /account\.active && canDeactivateAccount\(actor, account\)/);
   const screen = readFileSync("components/users-admin.tsx", "utf8");
-  assert.match(screen, /canDeactivateAccount\(actor, user\)/);
+  assert.match(screen, /<AccountRowActions actor=\{actor\} account=\{user\}/);
   assert.match(screen, /canDeactivateAccount\(actor, \{ id: editing\.id, role: editing\.role \}\)/);
 });
 

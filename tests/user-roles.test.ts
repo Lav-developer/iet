@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { adminRoles, departmentScopedRole, isAdminRole, resolveDepartmentAssignment, roleScopeLabel } from "../lib/user-roles";
+import { ACCOUNT_ERRORS, adminRoles, authorizeAccountCreation, authorizeAccountUpdate, departmentScopedRole, isAdminRole, resolveDepartmentAssignment, roleScopeLabel } from "../lib/user-roles";
 import { DepartmentSelect } from "../components/department-select";
 
 Object.assign(globalThis, { React });
@@ -110,7 +110,7 @@ test("account scope labels describe each role honestly", () => {
 
 test("the users API applies the shared policy to create and update, and stores the internal id", () => {
   const route = readFileSync("app/api/admin/users/route.ts", "utf8");
-  assert.match(route, /import \{ canActOnAccount, resolveDepartmentAssignment \} from "@\/lib\/user-roles"/);
+  assert.match(route, /import \{ authorizeAccountCreation, authorizeAccountDeactivation, authorizeAccountUpdate, resolveDepartmentAssignment \} from "@\/lib\/user-roles"/);
   assert.match(route, /resolveDepartmentAssignment\(\{ role, departmentId, currentDepartmentId \}/);
   assert.match(route, /departmentId: assignment\.departmentId/, "the resolved internal id is what gets stored");
   // The inline rules it replaces are gone.
@@ -118,11 +118,18 @@ test("the users API applies the shared policy to create and update, and stores t
   assert.doesNotMatch(route, /resultingDepartmentId === undefined \? target\.departmentId/);
   // Null is accepted for institute-wide roles.
   assert.match(route, /const departmentIdSchema = z\.string\(\)\.trim\(\)\.max\(200\)\.nullable\(\)\.optional\(\)/);
-  // RBAC is untouched.
+  // RBAC is untouched: only SUPER_ADMIN / IET_ADMIN reach the handlers, and
+  // every write is gated by the shared account decision (lib/user-roles),
+  // which refuses an IET administrator creating a super administrator or
+  // touching a super administrator account.
   assert.match(route, /if \(actor\.role !== "SUPER_ADMIN" && actor\.role !== "IET_ADMIN"\) return NextResponse\.json\(\{ error: "Forbidden" \}, \{ status: 403 \}\)/);
-  assert.match(route, /function permitted\(actor: \{ role: string \}, target: \{ role: string \}\)/);
-  assert.match(route, /IET administrators cannot create super administrators/);
-  assert.match(route, /You cannot modify this administrator/);
+  assert.match(route, /const decision = authorizeAccountCreation\(actor, input\.role\)/);
+  assert.match(route, /const decision = authorizeAccountUpdate\(actor, target, body\.data\)/);
+  assert.match(route, /const decision = authorizeAccountDeactivation\(actor, target\)/);
+  assert.equal(authorizeAccountCreation({ id: "iet", role: "IET_ADMIN" }, "SUPER_ADMIN").ok, false);
+  assert.match(ACCOUNT_ERRORS.createSuperAdmin, /IET administrators cannot create super administrators/);
+  assert.equal(authorizeAccountUpdate({ id: "iet", role: "IET_ADMIN" }, { id: "super", role: "SUPER_ADMIN" }, { name: "x" }).ok, false);
+  assert.match(ACCOUNT_ERRORS.notManageable, /You cannot modify this administrator/);
 });
 
 test("the admin UI shows the department selector only for DEPARTMENT_ADMIN, in create and edit", () => {

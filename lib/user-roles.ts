@@ -111,3 +111,76 @@ export function canGrantRole(actor: { role: string } | null | undefined, role: s
   if (actor?.role === "SUPER_ADMIN") return true;
   return actor?.role === "IET_ADMIN" && role !== "SUPER_ADMIN";
 }
+
+/** Only the two institute-wide administrator roles manage accounts at all. */
+export function canManageAccounts(actor: { role: string } | null | undefined): boolean {
+  return actor?.role === "SUPER_ADMIN" || actor?.role === "IET_ADMIN";
+}
+
+/**
+ * Whether the actor may change the *role* of a target account: the target
+ * must be manageable, and nobody changes their own role (a super administrator
+ * demoting themselves could leave the institute without one; another super
+ * administrator must do it).
+ */
+export function canChangeAccountRole(actor: { id: string; role: string } | null | undefined, target: { id: string; role: string }): boolean {
+  if (!actor || actor.id === target.id) return false;
+  return canActOnAccount(actor, target);
+}
+
+export type AccountChange = { name?: string; password?: string; role?: string; departmentId?: string | null; active?: boolean };
+export type AccountDecision = { ok: true } | { ok: false; status: 400 | 403; error: string };
+
+export const ACCOUNT_ERRORS = {
+  forbidden: "Forbidden",
+  notManageable: "You cannot modify this administrator. Only a super administrator can change a super administrator account.",
+  createSuperAdmin: "IET administrators cannot create super administrators.",
+  grantSuperAdmin: "IET administrators cannot grant super administrator access.",
+  unknownRole: "Unknown role.",
+  selfDeactivate: "Use sign out instead of deactivating your current account.",
+  selfRole: "You cannot change your own role. Ask a super administrator to change it.",
+  cannotDeactivate: "You cannot deactivate this account.",
+} as const;
+
+const refuse = (status: 400 | 403, error: string): AccountDecision => ({ ok: false, status, error });
+
+/** The users API's create rule: only account managers, and IET_ADMIN never creates a SUPER_ADMIN. */
+export function authorizeAccountCreation(actor: { id: string; role: string } | null | undefined, role: string): AccountDecision {
+  if (!canManageAccounts(actor)) return refuse(403, ACCOUNT_ERRORS.forbidden);
+  if (!isAdminRole(role)) return refuse(400, ACCOUNT_ERRORS.unknownRole);
+  if (!canGrantRole(actor, role)) return refuse(403, ACCOUNT_ERRORS.createSuperAdmin);
+  return { ok: true };
+}
+
+/**
+ * The users API's update rule, evaluated on the stored target (never on the
+ * client's idea of it) before anything is written:
+ *
+ * 1. only SUPER_ADMIN / IET_ADMIN manage accounts;
+ * 2. the target must be manageable — an IET_ADMIN can change nothing on a
+ *    SUPER_ADMIN account, not the role, not the password, not the name or
+ *    status;
+ * 3. a role may only be set if the actor could grant it (IET_ADMIN never
+ *    grants SUPER_ADMIN, so an IET_ADMIN cannot escalate any account);
+ * 4. an actor never deactivates itself or changes its own role.
+ */
+export function authorizeAccountUpdate(actor: { id: string; role: string } | null | undefined, target: { id: string; role: string }, change: AccountChange): AccountDecision {
+  if (!actor || !canManageAccounts(actor)) return refuse(403, ACCOUNT_ERRORS.forbidden);
+  if (!canActOnAccount(actor, target)) return refuse(403, ACCOUNT_ERRORS.notManageable);
+  if (change.role !== undefined) {
+    if (!isAdminRole(change.role)) return refuse(400, ACCOUNT_ERRORS.unknownRole);
+    if (!canGrantRole(actor, change.role)) return refuse(403, ACCOUNT_ERRORS.grantSuperAdmin);
+  }
+  if (actor.id === target.id) {
+    if (change.active === false) return refuse(400, ACCOUNT_ERRORS.selfDeactivate);
+    if (change.role !== undefined && change.role !== target.role) return refuse(400, ACCOUNT_ERRORS.selfRole);
+  }
+  return { ok: true };
+}
+
+/** The users API's deactivate rule: a manageable target that is not the actor itself. */
+export function authorizeAccountDeactivation(actor: { id: string; role: string } | null | undefined, target: { id: string; role: string }): AccountDecision {
+  if (!canManageAccounts(actor)) return refuse(403, ACCOUNT_ERRORS.forbidden);
+  if (!canDeactivateAccount(actor, target)) return refuse(403, ACCOUNT_ERRORS.cannotDeactivate);
+  return { ok: true };
+}
