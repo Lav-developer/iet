@@ -64,7 +64,7 @@ test("signing out deletes the session on the server and performs a full navigati
   assert.match(auth, /export async function clearSession\(\) \{\s*const store = await cookies\(\);\s*store\.delete\(COOKIE_NAME\);/);
   // Without the cookie every /admin page redirects to the login page, and
   // every admin API answers 401 — so the workspace is closed after sign-out.
-  const layout = readFileSync("app/admin/(app)/layout.tsx", "utf8");
+  const layout = readFileSync("app/admin/layout.tsx", "utf8");
   assert.match(layout, /const user = await getSession\(\);\s*if \(!user\) redirect\("\/admin\/login"\)/);
   assert.match(layout, /export const dynamic = "force-dynamic"/);
   assert.match(auth, /if \(!token\) return null;/);
@@ -87,5 +87,5 @@ test("the workspace navigation is grouped by role: Dashboard, Content, Administr
   assert.deepEqual([...positions].sort((a, b) => a - b), positions, "content sections keep the requested order");
   // No prototype naming in the workspace chrome.
   assert.doesNotMatch(shell, /Content Studio|Public surface|Workspace<\/div>/);
-  assert.doesNotMatch(readFileSync("app/admin/login/page.tsx", "utf8"), /Content Studio|demo account|IET CMS/);
+  assert.doesNotMatch(readFileSync("app/(auth)/admin/login/page.tsx", "utf8"), /Content Studio|demo account|IET CMS/);
 });

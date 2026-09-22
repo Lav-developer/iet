@@ -78,11 +78,22 @@ test("EDITOR keeps institutional content editing and is offered no administrativ
 });
 
 test("entity capabilities never offer what the workflow would reject", () => {
-  assert.deepEqual(entityCapability(EDITOR, "notices").createStatusOptions, ["DRAFT", "REVIEW"]);
-  assert.deepEqual(entityCapability(EDITOR, "notices").editStatusOptions, ["DRAFT", "REVIEW"]);
-  assert.equal(entityCapability(EDITOR, "notices").canPublish, false);
-  assert.deepEqual(entityCapability(DEPT, "notices").editStatusOptions, ["DRAFT", "REVIEW"]);
+  // Editors publish within the editorial scope but never unpublish or archive.
+  assert.deepEqual(entityCapability(EDITOR, "notices").createStatusOptions, ["DRAFT", "REVIEW", "PUBLISHED"]);
+  assert.deepEqual(entityCapability(EDITOR, "notices").editStatusOptions, ["DRAFT", "REVIEW", "PUBLISHED"]);
+  assert.equal(entityCapability(EDITOR, "notices").canPublish, true);
+  assert.equal(entityCapability(EDITOR, "notices").canUnpublish, false);
+  // A department administrator writes and publishes only with a resolvable own
+  // department (the server refuses every write without one, so none is offered).
+  assert.deepEqual(entityCapability(DEPT, "notices").editStatusOptions, ["DRAFT"]);
+  assert.equal(entityCapability(DEPT, "notices").canCreate, false);
   assert.equal(entityCapability(DEPT, "notices").canPublish, false);
+  assert.equal(entityCapability(DEPT, "notices").canUnpublish, false);
+  assert.deepEqual(entityCapability(DEPT, "notices", "computer-science-engineering").createStatusOptions, ["DRAFT", "REVIEW", "PUBLISHED"]);
+  assert.deepEqual(entityCapability(DEPT, "notices", "computer-science-engineering").editStatusOptions, ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"]);
+  assert.equal(entityCapability(DEPT, "notices", "computer-science-engineering").canPublish, true);
+  assert.equal(entityCapability(DEPT, "notices", "computer-science-engineering").canUnpublish, true);
+  assert.equal(entityCapability(DEPT, "pages", "computer-science-engineering").canPublish, false, "not for content outside the department scope");
   // Publishing roles publish directly: a new record may be created as PUBLISHED.
   assert.deepEqual(entityCapability(SUPER, "notices").createStatusOptions, ["DRAFT", "REVIEW", "PUBLISHED"]);
   assert.equal(entityCapability(SUPER, "notices").canPublish, true);

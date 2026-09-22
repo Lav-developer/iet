@@ -13,7 +13,7 @@ test("public routes and navigation cannot reintroduce admin links or editorial U
     const source = readFileSync(file, "utf8");
     assert.doesNotMatch(source, /href=["'`]\/admin|Edit in CMS|CMS sign in|<SourceNote|<VerificationBadge|queryable entities|review-ready|source marker|record status|before official public launch/i, file);
   }
-  assert.match(readFileSync("app/admin/login/page.tsx", "utf8"), /api\/auth\/login/);
+  assert.match(readFileSync("app/(auth)/admin/login/page.tsx", "utf8"), /api\/auth\/login/);
 });
 
 test("new migration is additive and preserves faculty when assets are deleted", () => {

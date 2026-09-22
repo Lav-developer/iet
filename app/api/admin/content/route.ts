@@ -4,7 +4,7 @@ import { z } from "zod";
 import { requireAdmin, type SessionUser } from "@/lib/auth";
 import { getPrisma } from "@/lib/db";
 import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
-import { canAccess, canPublish, departmentScoped, entitySchema, sanitize, validatePayload, workflowTransitionAllowed } from "@/lib/content-policy";
+import { canAccess, canPublish, canUnpublish, departmentScoped, entitySchema, sanitize, validatePayload, workflowTransitionAllowed, type PublishScope } from "@/lib/content-policy";
 import { deleteEntity, getEntity, getEntityLabel, getSingleEntityRecord, upsertEntity } from "@/lib/store";
 import type { EntityName } from "@/lib/types";
 
@@ -61,10 +61,13 @@ export async function POST(request: Request) {
     const entity = entitySchema.parse(body.entity);
     const data = sanitize(entity, body.data || {});
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
+    // Publishing authority is decided per record: entity + the department the
+    // record will belong to, against the administrator's assigned department.
+    const scope: PublishScope = { entity, departmentSlug: data.departmentSlug, assignedDepartmentSlug };
     // Three separate decisions, each with a plain-language explanation, so an
     // administrator learns what to change instead of guessing between causes.
-    if (!canAccess(user, entity, "write", data, undefined, assignedDepartmentSlug)) return forbidden(accessDeniedMessage(user, entity, "create", data, undefined, assignedDepartmentSlug));
-    if (!workflowTransitionAllowed(user, undefined, data.status)) return forbidden(workflowDeniedMessage(user, undefined, data.status));
+    if (!canAccess(user, entity, "write", data, undefined, assignedDepartmentSlug)) return forbidden(accessDeniedMessage(user, entity, "create", data, undefined, assignedDepartmentSlug, scope));
+    if (!workflowTransitionAllowed(user, undefined, data.status, scope)) return forbidden(workflowDeniedMessage(user, undefined, data.status, scope));
     if (!(await departmentRelationsAllowed(user, entity, data))) return forbidden(RELATIONS_OUTSIDE_DEPARTMENT);
     validatePayload(entity, data);
     await validateAssetRelations(user, entity, data, getSingleEntityRecord, assignedDepartmentSlug);
@@ -89,8 +92,10 @@ export async function PATCH(request: Request) {
     if (!current) return NextResponse.json({ error: "Record not found" }, { status: 404 });
     const data = sanitize(entity, body.data || {});
     const assignedDepartmentSlug = user.role === "DEPARTMENT_ADMIN" && user.departmentId ? await getAssignedDepartmentSlug(user.departmentId) : undefined;
-    if (!canAccess(user, entity, "write", data, current, assignedDepartmentSlug)) return forbidden(accessDeniedMessage(user, entity, "update", data, current, assignedDepartmentSlug));
-    if (!workflowTransitionAllowed(user, current, data.status)) return forbidden(workflowDeniedMessage(user, current, data.status));
+    // The record's department after the write (unchanged when the request omits it).
+    const scope: PublishScope = { entity, departmentSlug: data.departmentSlug === undefined ? current.departmentSlug : data.departmentSlug, assignedDepartmentSlug };
+    if (!canAccess(user, entity, "write", data, current, assignedDepartmentSlug)) return forbidden(accessDeniedMessage(user, entity, "update", data, current, assignedDepartmentSlug, scope));
+    if (!workflowTransitionAllowed(user, current, data.status, scope)) return forbidden(workflowDeniedMessage(user, current, data.status, scope));
     if (!(await departmentRelationsAllowed(user, entity, data))) return forbidden(RELATIONS_OUTSIDE_DEPARTMENT);
     // Validate the record as it will exist after the update. Validating the
     // incoming fragment alone rejected every workflow-only status change on a
@@ -133,8 +138,14 @@ function forbidden(message: string) {
   return NextResponse.json({ error: message }, { status: 403 });
 }
 
+const PUBLISH_DENIED = "Your role cannot publish this record. Save it as a draft or submit it for review, and ask an institute administrator to publish it.";
+const UNPUBLISH_DENIED = "Your role cannot unpublish a published record. Save your changes instead, or ask an institute administrator to unpublish it.";
+const ARCHIVE_DENIED = "Your role cannot archive records. Ask an institute administrator.";
+const ARCHIVED_READ_ONLY = "This record is archived and cannot be changed. An institute administrator can restore it as a draft.";
+const PUBLISHED_READ_ONLY = "This record is on the public website and your role cannot publish changes to it. Ask an institute administrator.";
+
 /** Why `canAccess` refused a write, in words a non-technical administrator can act on. */
-function accessDeniedMessage(user: SessionUser, entity: EntityName, verb: "create" | "update", data: Record<string, unknown>, current: Record<string, unknown> | undefined, assignedDepartmentSlug: string | undefined) {
+function accessDeniedMessage(user: SessionUser, entity: EntityName, verb: "create" | "update", data: Record<string, unknown>, current: Record<string, unknown> | undefined, assignedDepartmentSlug: string | undefined, scope: PublishScope) {
   const currentStatus = current ? String(current.status || "DRAFT") : undefined;
   if (user.role === "DEPARTMENT_ADMIN") {
     if (!departmentScoped.has(entity)) return "Your role is scoped to department content.";
@@ -144,23 +155,29 @@ function accessDeniedMessage(user: SessionUser, entity: EntityName, verb: "creat
     if (currentDepartment && currentDepartment !== assignedDepartmentSlug) return "This record belongs to another department. You can only change records of your own department.";
     if (requestedDepartment !== assignedDepartmentSlug) return verb === "create" ? "You can only create records for your own department." : "Records must stay in your own department; moving a record to another department is not permitted.";
   }
-  if (currentStatus === "ARCHIVED") return "This record is archived and cannot be changed. An institute administrator can restore it as a draft.";
-  if (data.status === "PUBLISHED" && currentStatus !== "PUBLISHED") return "Your role can save and submit content for review, but publishing is done by an institute administrator.";
-  if (data.status === "ARCHIVED") return "Your role cannot archive records. Ask an institute administrator.";
-  if (currentStatus === "PUBLISHED" && data.status !== undefined && data.status !== "PUBLISHED") return "Your role cannot unpublish a published record. Save your changes instead, or ask an institute administrator to unpublish it.";
+  const publisher = canPublish(user, scope);
+  const curator = canUnpublish(user, scope);
+  if (currentStatus === "ARCHIVED" && !curator) return ARCHIVED_READ_ONLY;
+  if (data.status === "ARCHIVED" && !curator) return ARCHIVE_DENIED;
+  if (data.status === "PUBLISHED" && !publisher) return PUBLISH_DENIED;
+  if (currentStatus === "PUBLISHED" && data.status === undefined && !publisher) return PUBLISHED_READ_ONLY;
+  if (currentStatus === "PUBLISHED" && data.status !== undefined && data.status !== "PUBLISHED" && !curator) return UNPUBLISH_DENIED;
   return verb === "create" ? "Your role cannot create this record." : "Your role cannot change this record.";
 }
 
 /** Why the workflow refused a status change. */
-function workflowDeniedMessage(user: SessionUser, current: Record<string, unknown> | undefined, requested: unknown) {
+function workflowDeniedMessage(user: SessionUser, current: Record<string, unknown> | undefined, requested: unknown, scope: PublishScope) {
   const next = String(requested);
   const previous = current ? String(current.status || "DRAFT") : undefined;
+  const publisher = canPublish(user, scope);
+  const curator = canUnpublish(user, scope);
   if (!["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"].includes(next)) return "The requested status is not recognised.";
-  if (next === "PUBLISHED" && !canPublish(user)) return "Your role can save and submit content for review, but publishing is done by an institute administrator.";
+  if (next === "PUBLISHED" && !publisher) return PUBLISH_DENIED;
   if (!previous && next === "ARCHIVED") return "A new record cannot be created as archived. Save it as a draft or publish it.";
+  if (next === "ARCHIVED" && !curator) return ARCHIVE_DENIED;
   if (next === "ARCHIVED" && previous !== "PUBLISHED") return "Only a published record can be archived. Unpublished records can simply stay as drafts.";
-  if (previous === "ARCHIVED") return canPublish(user) ? "An archived record must be restored as a draft before it is published again." : "This record is archived. An institute administrator can restore it.";
-  if (previous === "PUBLISHED" && !canPublish(user)) return "Your role cannot unpublish a published record. Save your changes instead, or ask an institute administrator to unpublish it.";
+  if (previous === "ARCHIVED") return curator ? "An archived record must be restored as a draft before it is published again." : ARCHIVED_READ_ONLY;
+  if (previous === "PUBLISHED" && !curator) return UNPUBLISH_DENIED;
   return "That change of status is not available for this record.";
 }
 

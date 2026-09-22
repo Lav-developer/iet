@@ -348,7 +348,7 @@ function EditorModal({ entity, config, capability, departments, value, saving, e
       {field.type === "department" && capability.fixedDepartmentSlug && <div className="form-hint" id={`field-${field.key}-hint`}>Your account belongs to this department, so {entity === "notices" ? "the notice" : "the record"} is filed under it automatically.</div>}
     </div>)}</div>
     {entity === "departments" && <SocialLinksEditor value={form.socialLinks} onChange={(links) => set("socialLinks", links)} />}
-    {actions.length === 0 && <div className="alert" role="note">{currentStatus === "ARCHIVED" ? "This record is archived. An institute administrator can restore it as a draft." : "Your account cannot change this record."}</div>}
+    {actions.length === 0 && <div className="alert" role="note">{currentStatus === "ARCHIVED" ? "This record is archived. An institute administrator can restore it as a draft." : currentStatus === "PUBLISHED" ? "This record is on the public website and your account cannot publish changes to it. Ask an institute administrator." : "Your account cannot change this record."}</div>}
     {actions.some((action) => action.description) && <ul className="form-hint editor-action-notes">{actions.filter((action) => action.description).map((action) => <li key={action.status}><strong>{action.label}:</strong> {action.description}</li>)}</ul>}
     <div className="form-actions">
       <button className="button secondary small-button" disabled={uploading || saving} onClick={onClose}>Cancel</button>
@@ -433,7 +433,7 @@ function AssetPicker({ fieldKey, value, departmentSlug, onChange, onBusyChange }
     {collection === "media" && <><label className="form-hint" htmlFor="photo-alt">Description of a new photograph (for screen readers)</label><input id="photo-alt" className="form-control" value={altText} maxLength={300} placeholder="Portrait of Dr. …" onChange={(event) => setAltText(event.target.value)} /></>}
     {collection !== "organizations" && <><label className="form-hint" htmlFor={`upload-${fieldKey}`}>{collection === "media" ? "Or upload a new photograph" : "Or upload a new PDF"}</label><input id={`upload-${fieldKey}`} type="file" disabled={busy} accept={collection === "media" ? "image/png,image/jpeg,image/webp,image/gif" : "application/pdf"} onChange={(event) => { void upload(event.target.files?.[0]); event.target.value = ""; }} /></>}
     {collection === "documents" && fieldKey === "documentId" && <p className="form-hint">A newly uploaded PDF is kept private until this notice is published. Publishing the notice makes the PDF public as well.</p>}
-    {collection === "documents" && fieldKey === "cvDocumentId" && <p className="form-hint">A newly uploaded CV is kept private until an institute administrator publishes it in Documents.</p>}
+    {collection === "documents" && fieldKey === "cvDocumentId" && <p className="form-hint">A newly uploaded CV is kept private until it is published in Documents.</p>}
     {busy && <p role="status">Uploading…</p>}{error && <p role="alert">{error}</p>}
   </div>;
 }

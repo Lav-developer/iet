@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPrisma } from "@/lib/db";
 import { requireAdmin } from "@/lib/auth";
-import { canPublish } from "@/lib/content-policy";
+import { canPublish, type PublishScope } from "@/lib/content-policy";
 import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
 import { deleteObject, describeStorageError, objectUrl, putObject, randomObjectKey, validateMagicBytes, validateUpload } from "@/lib/storage";
 import { upsertEntity } from "@/lib/store";
@@ -39,14 +39,20 @@ export async function POST(request: Request) {
     if (collection === "media" && !altText) return NextResponse.json({ error: "Alternative text is required for images. Use a concise description or state that the image is decorative." }, { status: 400 });
 
     const departmentSlug = String(form.get("departmentSlug") || "").trim() || undefined;
+    let assignedDepartmentSlug: string | undefined;
     if (user.role === "DEPARTMENT_ADMIN") {
       if (collection !== "documents" || !departmentSlug || !user.departmentId) return NextResponse.json({ error: "Department administrators may upload only scoped department documents." }, { status: 403 });
       const prisma = getPrisma();
       const department = prisma ? await prisma.department.findUnique({ where: { id: user.departmentId }, select: { slug: true } }) : null;
       if (!department || department.slug !== departmentSlug) return NextResponse.json({ error: "Department ownership check failed." }, { status: 403 });
+      assignedDepartmentSlug = department.slug;
     }
     const status = String(form.get("status") || "DRAFT");
-    if (!canPublish(user) && ["PUBLISHED", "ARCHIVED"].includes(status)) return NextResponse.json({ error: "Your role can upload a PDF as a draft. It becomes public when the notice that uses it is published, or when an institute administrator publishes it in Documents." }, { status: 403 });
+    // Publishing on upload follows the same record-scoped authority as the
+    // content workflow (documents entity, this department); nothing is ever
+    // created as archived.
+    const scope: PublishScope = { entity: "documents", departmentSlug, assignedDepartmentSlug };
+    if (status === "ARCHIVED" || (status === "PUBLISHED" && !canPublish(user, scope))) return NextResponse.json({ error: "Your role can upload a PDF as a draft. It becomes public when the notice that uses it is published, or when an institute administrator publishes it in Documents." }, { status: 403 });
 
     const key = randomObjectKey(collection, file.name);
     const stored = await putObject({ key, body: buffer, contentType: file.type });

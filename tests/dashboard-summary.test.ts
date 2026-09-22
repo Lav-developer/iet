@@ -94,7 +94,7 @@ test("every admin section keeps its own authentication gate", () => {
     assert.match(source, /requireAdmin\(\)/, `${route} authenticates`);
   }
   // The workspace layout redirects unauthenticated visitors before any page runs.
-  const layout = readFileSync("app/admin/(app)/layout.tsx", "utf8");
+  const layout = readFileSync("app/admin/layout.tsx", "utf8");
   assert.match(layout, /const user = await getSession\(\)/);
   assert.match(layout, /if \(!user\) redirect\("\/admin\/login"\)/);
   // Logout clears the session cookie through the existing endpoint.

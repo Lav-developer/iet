@@ -57,7 +57,7 @@ test("uploads are explained in plain terms and drafts are the default for roles 
 
 test("no prototype, handover or demo wording remains in staff-facing or public-facing copy", () => {
   const files = [
-    "components/admin-shell.tsx", "components/entity-manager.tsx", "app/admin/(app)/page.tsx", "app/admin/login/page.tsx", "app/api/admin/summary/route.ts",
+    "components/admin-shell.tsx", "components/entity-manager.tsx", "app/admin/(app)/page.tsx", "app/(auth)/admin/login/page.tsx", "app/api/admin/summary/route.ts",
     "app/(public)/page.tsx", "components/public-shell.tsx", "components/notice-board.tsx", "app/(public)/admissions/page.tsx", "app/(public)/admissions/fee-structure/page.tsx",
   ];
   for (const file of files) {

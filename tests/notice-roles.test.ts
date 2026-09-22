@@ -38,17 +38,28 @@ test("a DEPARTMENT_ADMIN can only create and manage their own department's notic
   assert.equal(canAccess(DEPT, "notices", "delete", undefined, draftNotice(OWN), OWN), false);
   // No department scope at all: nothing.
   assert.equal(canAccess({ role: "DEPARTMENT_ADMIN" }, "notices", "write", { status: "DRAFT" }, undefined, OWN), false);
-  // Publishing remains an institute-level transition.
-  assert.equal(canAccess(DEPT, "notices", "write", { status: "PUBLISHED", departmentSlug: OWN }, draftNotice(OWN), OWN), false);
-  assert.equal(workflowTransitionAllowed(DEPT, { id: "n", status: "REVIEW" }, "PUBLISHED"), false);
+  // A department administrator publishes own-department notices directly, and
+  // only those: never another department's, never without a resolvable department.
+  const ownScope = { entity: "notices", departmentSlug: OWN, assignedDepartmentSlug: OWN } as const;
+  assert.equal(canAccess(DEPT, "notices", "write", { status: "PUBLISHED", departmentSlug: OWN }, draftNotice(OWN), OWN), true);
+  assert.equal(workflowTransitionAllowed(DEPT, { id: "n", status: "REVIEW", departmentSlug: OWN }, "PUBLISHED", ownScope), true);
+  assert.equal(workflowTransitionAllowed(DEPT, { id: "n", status: "DRAFT", departmentSlug: OWN }, "PUBLISHED", ownScope), true);
+  assert.equal(workflowTransitionAllowed(DEPT, { id: "n", status: "PUBLISHED", departmentSlug: OWN }, "DRAFT", ownScope), true, "unpublish own");
+  assert.equal(canAccess(DEPT, "notices", "write", { status: "PUBLISHED", departmentSlug: OTHER }, draftNotice(OTHER), OWN), false);
+  assert.equal(workflowTransitionAllowed(DEPT, { id: "n", status: "REVIEW", departmentSlug: OTHER }, "PUBLISHED", { ...ownScope, departmentSlug: OTHER }), false);
+  assert.equal(workflowTransitionAllowed(DEPT, { id: "n", status: "REVIEW", departmentSlug: OWN }, "PUBLISHED", { entity: "notices", departmentSlug: OWN }), false, "no resolvable department");
+  assert.equal(workflowTransitionAllowed(DEPT, { id: "n", status: "REVIEW" }, "PUBLISHED"), false, "no record scope");
   assert.equal(workflowTransitionAllowed(IET, { id: "n", status: "REVIEW" }, "PUBLISHED"), true);
 });
 
-test("EDITOR notice permissions keep their existing scope (no delete, no publish, institution-wide) and may edit a published notice", () => {
+test("EDITOR notice permissions keep their existing scope (no delete, institution-wide), publish within it, and may edit a published notice", () => {
   assert.equal(canAccess(EDITOR, "notices", "write", { status: "DRAFT" }, undefined, undefined), true);
   assert.equal(canAccess(EDITOR, "notices", "write", { status: "REVIEW" }, draftNotice(), undefined), true);
   assert.equal(canAccess(EDITOR, "notices", "delete", undefined, draftNotice(), undefined), false);
-  assert.equal(canAccess(EDITOR, "notices", "write", { status: "PUBLISHED" }, draftNotice(), undefined), false, "an editor cannot publish");
+  assert.equal(canAccess(EDITOR, "notices", "write", { status: "PUBLISHED" }, draftNotice(), undefined), true, "an editor publishes within the editorial scope");
+  assert.equal(workflowTransitionAllowed(EDITOR, draftNotice(), "PUBLISHED", { entity: "notices" }), true);
+  assert.equal(workflowTransitionAllowed(EDITOR, draftNotice(), "PUBLISHED"), false, "no record scope, no delegated authority");
+  assert.equal(canAccess(EDITOR, "notices", "write", { status: "ARCHIVED" }, { id: "n", status: "PUBLISHED" }, undefined), false, "an editor cannot archive");
   // Editing authority is separate from publishing authority: a published
   // notice can be corrected by an editor, and stays published.
   assert.equal(canAccess(EDITOR, "notices", "write", undefined, { id: "n", status: "PUBLISHED" }, undefined), true);

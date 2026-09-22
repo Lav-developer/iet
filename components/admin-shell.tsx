@@ -25,9 +25,12 @@ const administrationEntityLinks: [EntityName, string, typeof Newspaper][] = [["s
 /** Plain-language role names for the top bar. */
 const roleLabels: Record<string, string> = { SUPER_ADMIN: "Super administrator", IET_ADMIN: "Institute administrator", DEPARTMENT_ADMIN: "Department administrator", EDITOR: "Editor" };
 
+/**
+ * Workspace chrome for every /admin page. The server layout (app/admin/layout.tsx)
+ * has already verified the session before this renders; the sign-in page is
+ * outside that layout and never uses this shell.
+ */
 export function AdminShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
-  if (pathname === "/admin/login") return <>{children}</>;
   return <AdminFrame>{children}</AdminFrame>;
 }
 
