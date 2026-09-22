@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { UserRole } from "@/lib/auth";
-import type { EntityName } from "@/lib/types";
+import type { ContentStatus, EntityName } from "@/lib/types";
 
 export const entityValues = ["departments", "programs", "faculty", "laboratories", "researchAreas", "projects", "publications", "achievements", "events", "notices", "organizations", "pages", "links", "contacts", "settings", "media", "documents"] as const;
 export const entitySchema = z.enum(entityValues);
@@ -109,35 +109,122 @@ export function isDocumentCollectionKey(key: unknown): boolean {
  */
 export function canAccess(user: PolicyUser, entity: EntityName, action: "read" | "write" | "delete", payload?: Record<string, unknown>, current?: RecordSnapshot, assignedDepartmentSlug?: string): boolean {
   if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") return true;
-  if (user.role === "EDITOR") return action !== "delete" && current?.status !== "PUBLISHED" && current?.status !== "ARCHIVED" && payload?.status !== "PUBLISHED" && payload?.status !== "ARCHIVED";
+  if (user.role === "EDITOR") {
+    // Institution-wide editorial scope: every content entity, never delete.
+    // Publication state follows the editor's publishing authority (see
+    // `editorialWriteAllowed`), so nothing is offered that the workflow refuses.
+    if (action === "delete") return false;
+    return action === "read" || editorialWriteAllowed(user, { entity, departmentSlug: resultingDepartment(payload, current) }, payload, current);
+  }
   if (user.role === "DEPARTMENT_ADMIN") {
     if (!departmentScoped.has(entity) || action === "delete" || !user.departmentId) return false;
     const currentDepartment = current?.departmentSlug;
-    const requestedDepartment = payload?.departmentSlug === undefined ? currentDepartment : payload.departmentSlug;
+    const requestedDepartment = resultingDepartment(payload, current);
+    // Never cross-department: the record must belong to the assigned
+    // department now and after the write.
     if (!assignedDepartmentSlug || requestedDepartment !== assignedDepartmentSlug || (currentDepartment && currentDepartment !== assignedDepartmentSlug)) return false;
-    if (payload?.status === "PUBLISHED" || payload?.status === "ARCHIVED" || current?.status === "PUBLISHED") return false;
-    return true;
+    return action === "read" || editorialWriteAllowed(user, { entity, departmentSlug: requestedDepartment, assignedDepartmentSlug }, payload, current);
   }
   return false;
 }
 
+/** Department the record belongs to after the write: the payload's value, else the stored one. */
+function resultingDepartment(payload?: Record<string, unknown>, current?: RecordSnapshot): unknown {
+  return payload?.departmentSlug === undefined ? current?.departmentSlug : payload.departmentSlug;
+}
+
 /**
- * DRAFT → REVIEW → PUBLISHED → ARCHIVED workflow enforcement. Only
- * SUPER_ADMIN / IET_ADMIN may publish (REVIEW → PUBLISHED), archive
- * (PUBLISHED → ARCHIVED) or reopen (ARCHIVED → DRAFT). Every record must be
- * created as DRAFT.
+ * Write rule for the delegated roles (EDITOR, DEPARTMENT_ADMIN), derived from
+ * the same publishing authority the workflow enforces:
+ * - drafts and records in review may always be edited;
+ * - PUBLISHED may be requested (publish, or keep a live record live while
+ *   editing it) only with publishing authority for this record — a role that
+ *   cannot publish a record cannot change what the public sees either;
+ * - taking a live record offline, archiving, and touching archived records
+ *   need unpublish/archive authority for this record.
  */
-export function workflowTransitionAllowed(user: PolicyUser, current: RecordSnapshot, requested: unknown): boolean {
+function editorialWriteAllowed(user: PolicyUser, scope: PublishScope, payload?: Record<string, unknown>, current?: RecordSnapshot): boolean {
+  const currentStatus = current ? String(current.status || "DRAFT") : undefined;
+  const requested = payload?.status === undefined || payload?.status === "" ? undefined : String(payload.status);
+  const publisher = canPublish(user, scope);
+  const curator = canUnpublish(user, scope);
+  if (currentStatus === "ARCHIVED" || requested === "ARCHIVED") return curator;
+  if (requested === "PUBLISHED") return publisher;
+  if (currentStatus === "PUBLISHED") return requested === undefined ? publisher : curator;
+  return true;
+}
+
+/**
+ * The record a publishing decision is about. `departmentSlug` is the
+ * department the record belongs to after the write (payload value, else the
+ * stored one); `assignedDepartmentSlug` is the DEPARTMENT_ADMIN's own
+ * department as resolved by the caller from the database.
+ */
+export type PublishScope = { entity: EntityName; departmentSlug?: unknown; assignedDepartmentSlug?: string };
+
+/** Entities in the EDITOR's institution-wide editorial scope (everything it may write). */
+const editorialScope: ReadonlySet<string> = new Set(entityValues);
+
+/** DEPARTMENT_ADMIN publishing scope: department-scoped entity, record inside the assigned department. */
+function withinAssignedDepartment(user: PolicyUser, scope: PublishScope): boolean {
+  return Boolean(user.departmentId && scope.assignedDepartmentSlug && departmentScoped.has(scope.entity) && scope.departmentSlug === scope.assignedDepartmentSlug);
+}
+
+/**
+ * Publishing authority for one record (DRAFT/REVIEW → PUBLISHED, creating a
+ * record as PUBLISHED, and saving a PUBLISHED record so that it stays live):
+ * - SUPER_ADMIN / IET_ADMIN: every record;
+ * - DEPARTMENT_ADMIN: department-scoped entities, records of the assigned
+ *   department only — never another department's;
+ * - EDITOR: records within its editorial scope.
+ * Without a record scope no delegated authority is assumed: only the two
+ * institute-wide roles publish "in general".
+ */
+export function canPublish(user: PolicyUser, scope?: PublishScope): boolean {
+  if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") return true;
+  if (!scope) return false;
+  if (user.role === "EDITOR") return editorialScope.has(scope.entity);
+  if (user.role === "DEPARTMENT_ADMIN") return withinAssignedDepartment(user, scope);
+  return false;
+}
+
+/**
+ * Unpublish / archive / restore authority for one record: SUPER_ADMIN and
+ * IET_ADMIN everywhere, DEPARTMENT_ADMIN inside the assigned department.
+ * An EDITOR publishes but does not take content offline or archive it.
+ */
+export function canUnpublish(user: PolicyUser, scope?: PublishScope): boolean {
+  if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") return true;
+  if (!scope) return false;
+  if (user.role === "DEPARTMENT_ADMIN") return withinAssignedDepartment(user, scope);
+  return false;
+}
+
+/**
+ * Workflow enforcement. Publication needs no separate approval step: a user
+ * with publishing authority for the record publishes a draft directly —
+ * DRAFT → PUBLISHED — and REVIEW is an optional stage that any writer may
+ * enter (DRAFT → REVIEW) or leave again (REVIEW → DRAFT). Unpublishing
+ * (PUBLISHED → DRAFT), archiving and restoring an archived record need
+ * unpublish/archive authority. New records may be created as DRAFT or REVIEW
+ * by any writer, and as PUBLISHED with publishing authority. Keeping a record
+ * PUBLISHED (or ARCHIVED) while editing it needs the same authority as
+ * reaching that state.
+ */
+export function workflowTransitionAllowed(user: PolicyUser, current: RecordSnapshot, requested: unknown, scope?: PublishScope): boolean {
   if (requested === undefined) return true;
   const next = String(requested);
   const previous = current ? String(current.status || "DRAFT") : undefined;
   if (!statusValues.has(next)) return false;
-  if (!previous) return next === "DRAFT";
-  if (next === previous) return true;
+  const publisher = canPublish(user, scope);
+  const curator = canUnpublish(user, scope);
+  if (!previous) return next === "DRAFT" || next === "REVIEW" || (next === "PUBLISHED" && publisher);
+  if (next === previous) return next === "PUBLISHED" ? publisher : next === "ARCHIVED" ? curator : true;
   if (previous === "DRAFT" && next === "REVIEW") return true;
-  if (previous === "REVIEW" && next === "PUBLISHED") return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
-  if (previous === "PUBLISHED" && next === "ARCHIVED") return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
-  if (previous === "ARCHIVED" && next === "DRAFT") return user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN";
+  if (previous === "REVIEW" && next === "DRAFT") return true;
+  if ((previous === "DRAFT" || previous === "REVIEW") && next === "PUBLISHED") return publisher;
+  if (previous === "PUBLISHED" && (next === "DRAFT" || next === "ARCHIVED")) return curator;
+  if (previous === "ARCHIVED" && next === "DRAFT") return curator;
   return false;
 }
 
@@ -359,7 +446,11 @@ export function canPublishInstitutionWideNotice(user: PolicyUser): boolean {
 export type EntityCapabilityDetail = {
   canCreate: boolean;
   canDelete: boolean;
-  /** Statuses the CMS may offer when creating a record (policy: always DRAFT). */
+  /** Whether the role publishes records of this entity (within its scope) directly. */
+  canPublish: boolean;
+  /** Whether the role unpublishes, archives and restores records of this entity (within its scope). */
+  canUnpublish: boolean;
+  /** Statuses the CMS may offer when creating a record. */
   createStatusOptions: string[];
   /** Statuses the CMS may offer when editing an existing record. */
   editStatusOptions: string[];
@@ -371,23 +462,104 @@ export type EntityCapabilityDetail = {
  * What the CMS may offer for one entity and one role. Derived from the same
  * policy that `canAccess`/`workflowTransitionAllowed` enforce server-side, so
  * the workspace can hide what the API would reject without inventing rules.
+ * For a DEPARTMENT_ADMIN every record the workspace shows or creates belongs
+ * to the assigned department (the list is filtered in the database and the
+ * department field is fixed), so the entity-level answer is the record-level
+ * answer.
  */
 export function entityCapability(user: PolicyUser, entity: EntityName, assignedDepartmentSlug?: string): EntityCapabilityDetail {
   const everyStatus = ["DRAFT", "REVIEW", "PUBLISHED", "ARCHIVED"];
   if (user.role === "SUPER_ADMIN" || user.role === "IET_ADMIN") {
-    return { canCreate: true, canDelete: true, createStatusOptions: ["DRAFT"], editStatusOptions: everyStatus };
+    return { canCreate: true, canDelete: true, canPublish: true, canUnpublish: true, createStatusOptions: ["DRAFT", "REVIEW", "PUBLISHED"], editStatusOptions: everyStatus };
   }
   if (user.role === "EDITOR") {
-    return { canCreate: true, canDelete: false, createStatusOptions: ["DRAFT"], editStatusOptions: ["DRAFT", "REVIEW"] };
+    const publisher = canPublish(user, { entity });
+    return { canCreate: true, canDelete: false, canPublish: publisher, canUnpublish: false, createStatusOptions: publisher ? ["DRAFT", "REVIEW", "PUBLISHED"] : ["DRAFT", "REVIEW"], editStatusOptions: publisher ? ["DRAFT", "REVIEW", "PUBLISHED"] : ["DRAFT", "REVIEW"] };
   }
-  if (user.role === "DEPARTMENT_ADMIN" && user.departmentId && departmentScoped.has(entity)) {
+  // A department administrator works only inside the assigned department, which
+  // the server resolves from the account (never from the client). Without a
+  // resolvable department the server refuses every write, so nothing is offered.
+  if (user.role === "DEPARTMENT_ADMIN" && user.departmentId && departmentScoped.has(entity) && assignedDepartmentSlug) {
+    const scope: PublishScope = { entity, departmentSlug: assignedDepartmentSlug, assignedDepartmentSlug };
+    const publisher = canPublish(user, scope);
     return {
       canCreate: true,
       canDelete: false,
-      createStatusOptions: ["DRAFT"],
-      editStatusOptions: ["DRAFT", "REVIEW"],
-      ...(assignedDepartmentSlug ? { fixedDepartmentSlug: assignedDepartmentSlug } : {}),
+      canPublish: publisher,
+      canUnpublish: canUnpublish(user, scope),
+      createStatusOptions: publisher ? ["DRAFT", "REVIEW", "PUBLISHED"] : ["DRAFT", "REVIEW"],
+      editStatusOptions: publisher ? everyStatus : ["DRAFT", "REVIEW"],
+      fixedDepartmentSlug: assignedDepartmentSlug,
     };
   }
-  return { canCreate: false, canDelete: false, createStatusOptions: ["DRAFT"], editStatusOptions: ["DRAFT"] };
+  return { canCreate: false, canDelete: false, canPublish: false, canUnpublish: false, createStatusOptions: ["DRAFT"], editStatusOptions: ["DRAFT"] };
+}
+
+/** One button the editor offers; `status` is what the request will carry. */
+export type WorkflowAction = {
+  status: ContentStatus;
+  label: string;
+  /** Primary = the default action for this state; secondary = alternative. */
+  kind: "primary" | "secondary";
+  /** Ask for confirmation before performing a change with public effect. */
+  confirm?: string;
+  /** Plain-language explanation shown next to the buttons. */
+  description?: string;
+};
+
+/**
+ * Simple workflow controls for non-technical staff, derived from the same
+ * policy `workflowTransitionAllowed`/`canAccess` enforce on the server:
+ *
+ * - new record: Save as draft · Publish (publishing authority) · Submit for review
+ * - draft: Save draft · Publish · Submit for review
+ * - in review: Save changes · Publish · Return to draft
+ * - published: Save changes (changes go live; publishing authority) ·
+ *   Unpublish (unpublish authority); read-only otherwise
+ * - archived: Restore as draft (unpublish authority); read-only otherwise
+ *
+ * Every action returned here is accepted by the server for the same role and
+ * state, and nothing the server would accept is hidden (see
+ * tests/workflow-actions.test.ts).
+ */
+export function workflowActions(capability: Pick<EntityCapabilityDetail, "canPublish" | "canUnpublish" | "canCreate">, currentStatus?: string | null): WorkflowAction[] {
+  const status = currentStatus ? String(currentStatus) : undefined;
+  // `canCreate` is false only for a role with no write authority on the entity
+  // at all (see entityCapability); such a role gets no buttons for any state.
+  if (!capability.canCreate) return [];
+  const publisher = capability.canPublish;
+  const curator = capability.canUnpublish;
+  const publish: WorkflowAction = { status: "PUBLISHED", label: "Publish", kind: "primary", confirm: "Publish this record on the public website now?", description: "Publishing makes the record visible to the public immediately." };
+  const review: WorkflowAction = { status: "REVIEW", label: "Submit for review", kind: "secondary", description: publisher ? "Optional: mark the record as ready for another administrator to check." : "Marks the record as ready for an institute administrator to publish." };
+  if (!status) {
+    return [
+      { status: "DRAFT", label: "Save as draft", kind: publisher ? "secondary" : "primary", description: "Drafts are not shown on the public website." },
+      ...(publisher ? [publish] : []),
+      review,
+    ];
+  }
+  if (status === "DRAFT") {
+    return [
+      { status: "DRAFT", label: "Save draft", kind: publisher ? "secondary" : "primary" },
+      ...(publisher ? [publish] : []),
+      review,
+    ];
+  }
+  if (status === "REVIEW") {
+    return [
+      { status: "REVIEW", label: "Save changes", kind: publisher ? "secondary" : "primary", description: "The record stays in review and is not public yet." },
+      ...(publisher ? [{ ...publish, description: undefined }] : []),
+      { status: "DRAFT", label: "Return to draft", kind: "secondary" },
+    ];
+  }
+  if (status === "PUBLISHED") {
+    return [
+      ...(publisher ? [{ status: "PUBLISHED", label: "Save changes", kind: "primary", description: "This record is live: saved changes appear on the public website immediately." } as WorkflowAction] : []),
+      ...(curator ? [{ status: "DRAFT", label: "Unpublish", kind: "secondary", confirm: "Remove this record from the public website? It is kept as a draft and can be published again later.", description: "Unpublishing removes the record from the public website and keeps it as a draft." } as WorkflowAction] : []),
+    ];
+  }
+  if (status === "ARCHIVED") {
+    return curator ? [{ status: "DRAFT", label: "Restore as draft", kind: "primary", description: "Archived records are not public. Restoring makes the record an editable draft again." }] : [];
+  }
+  return [];
 }

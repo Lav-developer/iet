@@ -1,12 +1,12 @@
 "use client";
 
+import { AccountRowActions } from "@/components/account-actions";
 import { DepartmentSelect, type DepartmentOption } from "@/components/department-select";
 import type { SessionUser } from "@/lib/auth";
-import { adminRolesFor, canDeactivateAccount } from "@/lib/user-roles";
+import { adminRolesFor, canChangeAccountRole, canDeactivateAccount, roleScopeLabel } from "@/lib/user-roles";
 import { MIN_PASSWORD_LENGTH, PASSWORD_REQUIREMENT } from "@/lib/password-policy";
-import { adminRoles, roleScopeLabel } from "@/lib/user-roles";
 import Link from "next/link";
-import { Pencil, Save, ShieldCheck, UserPlus, UserX, X } from "lucide-react";
+import { Pencil, Save, ShieldCheck, UserPlus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 type UserRecord = { id: string; email: string; name: string; role: string; departmentId?: string | null; active: boolean; sessionVersion: number; department?: { slug: string; name: string } | null };
@@ -73,6 +73,9 @@ export function UsersAdmin() {
 
   const deactivate = async (id: string) => { if (!window.confirm("Deactivate this account and invalidate its sessions?")) return; const response = await fetch("/api/admin/users", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }); const body = await response.json().catch(() => ({})); if (!response.ok) { setError(body.error || "Unable to deactivate user"); return; } setMessage("Account deactivated and active sessions invalidated."); load(); };
 
+  // Roles the editor may offer for the account being edited (same rule as the API).
+  const roleOptions: string[] = editing ? adminRolesFor(actor, editing.role) : [];
+
   return <>
     <div className="entity-toolbar"><div><div className="admin-breadcrumb">Governance / User administration</div><h2>Administrator accounts</h2><p className="small">Manage named accounts, department scope and explicit session invalidation. Only department administrators are scoped to a department; every other role is institute-wide. Passwords are never displayed.</p></div><Link href="/admin/audit" className="button secondary small-button">Audit log</Link></div>
     {error && <div className="alert" role="alert">{error}</div>}
@@ -106,7 +109,7 @@ export function UsersAdmin() {
           <td>{roleScopeLabel(user.role, user.department?.name)}</td>
           <td>{user.sessionVersion}</td>
           <td>{user.active ? <span className="status-pill published">Active</span> : <span className="status-pill archived">Inactive</span>}</td>
-          <td><div className="entity-actions"><button className="mini-button" onClick={() => { setError(""); setMessage(""); setEditing({ id: user.id, email: user.email, name: user.name, role: user.role, departmentId: user.departmentId || "", password: "", active: user.active }); }}><Pencil size={13} /> Edit</button>{user.active && canDeactivateAccount(actor, user) && <button className="mini-button danger" onClick={() => deactivate(user.id)}><UserX size={13} /> Deactivate</button>}</div></td>
+          <td><AccountRowActions actor={actor} account={user} onEdit={() => { setError(""); setMessage(""); setEditing({ id: user.id, email: user.email, name: user.name, role: user.role, departmentId: user.departmentId || "", password: "", active: user.active }); }} onDeactivate={() => deactivate(user.id)} /></td>
         </tr>)}
       </tbody></table>
     </div>
@@ -117,7 +120,13 @@ export function UsersAdmin() {
       <div className="form-grid">
         <div className="form-field"><label htmlFor="edit-name">Name</label><input id="edit-name" className="form-control" value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} /></div>
         <div className="form-field"><label htmlFor="edit-email">Email</label><input id="edit-email" className="form-control" value={editing.email} disabled /></div>
-        <div className="form-field"><label htmlFor="edit-role">Role</label><select id="edit-role" className="form-select" value={editing.role} onChange={(event) => setEditing({ ...editing, role: event.target.value, departmentId: "" })}>{adminRolesFor(actor, editing.role).map((role) => <option key={role} value={role}>{role.replaceAll("_", " ")}</option>)}</select><span className="form-hint">{editing.role === "DEPARTMENT_ADMIN" ? "Scoped to one department." : "Institute-wide role — no department is assigned."}</span></div>
+        {/* The role can only be changed when the API would accept it: never on
+            the signed-in account, and only among roles the actor may grant. A
+            role outside that list is shown as text, never as a dropdown that
+            silently displays a different role. */}
+        {canChangeAccountRole(actor, { id: editing.id, role: editing.role }) && roleOptions.includes(editing.role)
+          ? <div className="form-field"><label htmlFor="edit-role">Role</label><select id="edit-role" className="form-select" value={editing.role} onChange={(event) => setEditing({ ...editing, role: event.target.value, departmentId: "" })}>{roleOptions.map((role) => <option key={role} value={role}>{role.replaceAll("_", " ")}</option>)}</select><span className="form-hint">{editing.role === "DEPARTMENT_ADMIN" ? "Scoped to one department." : "Institute-wide role — no department is assigned."}</span></div>
+          : <div className="form-field"><span className="form-label">Role</span><p className="form-control" style={{ background: "var(--paper-2)" }}>{editing.role.replaceAll("_", " ")}</p><span className="form-hint">{actor?.id === editing.id ? "You cannot change your own role. Ask a super administrator to change it." : "Only a super administrator can change this role."}</span></div>}
         {canDeactivateAccount(actor, { id: editing.id, role: editing.role }) ? <div className="form-field"><label htmlFor="edit-active">Account status</label><select id="edit-active" className="form-select" value={editing.active ? "active" : "inactive"} onChange={(event) => setEditing({ ...editing, active: event.target.value === "active" })}><option value="active">Active</option><option value="inactive">Inactive</option></select><span className="form-hint">Deactivating this account signs it out immediately.</span></div> : <div className="form-field"><span className="form-label">Account status</span><p className="form-control" style={{ background: "var(--paper-2)" }}>{editing.active ? "Active" : "Inactive"}</p><span className="form-hint">Your account cannot change its own status; use sign out instead.</span></div>}
         {/* Same role-dependent rule as account creation. */}
         {editing.role === "DEPARTMENT_ADMIN" && <DepartmentSelect

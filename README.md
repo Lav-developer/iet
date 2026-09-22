@@ -31,7 +31,7 @@ Important editorial rules built into the product:
 - The PDF's seat matrix is represented as programme records; current eligibility, fees and application rules are handed back to the official DSMNRU admissions system.
 - Projects, publications, achievements, events and student organisations that are not present in the source are stored as clearly marked draft placeholders and do not render publicly.
 - Faculty and staff contact details should be confirmed by IET before official publication.
-- This build is **not officially endorsed or live**. It is a review-ready implementation candidate subject to IET / DSMNRU approval.
+- Content is published by IET / DSMNRU administrators through the content management system; only published records appear on the public website.
 
 See [`docs/CONTENT-VERIFICATION.md`](docs/CONTENT-VERIFICATION.md) for the source inventory and editorial handover checklist.
 
@@ -142,11 +142,11 @@ No personal Gmail, personal API key, personal domain, Firebase project or develo
 
 ## CMS workflow
 
-1. Sign in at `/admin/login`.
+1. Sign in at `/admin/login`. Every `/admin` page checks the session on the server and redirects a signed-out visitor to the sign-in page; every admin API route authenticates and authorizes on its own as well.
 2. Choose an entity from the administrator sidebar.
-3. Create a record as `DRAFT`.
-4. An editor or administrator can move it to `REVIEW` after checking source, alt text, links and relationships.
-5. A permitted IET administrator publishes it.
+3. Save a record as a draft, or publish it directly if your role may publish that record (see Roles). Submitting for review is optional and never required before publishing.
+4. Saving a change to a published record keeps it published; the change goes live immediately, so a live record can be changed only by a role that may publish it.
+5. Unpublishing (back to draft), archiving and restoring an archived record need unpublish authority: institute administrators everywhere, a department administrator inside the assigned department.
 6. The public site renders only `PUBLISHED` records.
 7. Important create/update/delete actions appear in `/admin/audit`.
 
@@ -154,10 +154,10 @@ The local preview can opt into an explicitly configured file-backed store, but p
 
 ## Roles
 
-- **Super Admin**: full platform access.
-- **IET Administrator**: institute-wide content, users, settings and publishing.
-- **Department Administrator**: department-scoped academic content; should be assigned a department in the database.
-- **Editor**: create/edit working records; publishing and destructive permissions can be restricted further during institutional configuration.
+- **Super Admin**: full platform access; the only role that can create, change or deactivate super administrator accounts.
+- **IET Administrator**: institute-wide content, users, settings and publishing. Manages IET administrator, department administrator and editor accounts; cannot view an editor for, change the role or password of, or deactivate a super administrator, and cannot grant super administrator access. No account can change its own role or deactivate itself.
+- **Department Administrator**: department-scoped academic content of the assigned department only (must be assigned a department in the database). Publishes, unpublishes, archives and restores records of that department; never another department's records and never institution-wide content (pages, departments, research areas, links, contacts, settings, images).
+- **Editor**: creates, edits and publishes records within the institution-wide editorial scope; cannot unpublish, archive, restore or delete.
 
 The `User`, `UserRole`, `AuditLog` and relationship fields in the schema are designed for institutional ownership rather than a shared student account.
 

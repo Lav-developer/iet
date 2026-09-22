@@ -1,6 +1,8 @@
 import type { Notice } from "@/lib/types";
 
 export const NOTICES_PAGE_SIZE = 10;
+/** Number of notices the homepage notice board shows. */
+export const HOME_NOTICE_COUNT = 5;
 
 /** Newest notice first, with a deterministic tie-break for identical dates. */
 export function sortNotices(notices: Notice[]): Notice[] {
@@ -26,6 +28,11 @@ export function isExpired(notice: Notice, now: Date = new Date()): boolean {
 /** Publicly listed notices: current (non-expired) and published, newest first. */
 export function currentNotices(notices: Notice[], now: Date = new Date()): Notice[] {
   return sortNotices(notices.filter((notice) => !isExpired(notice, now)));
+}
+
+/** The homepage notice board: the newest current notices, at most HOME_NOTICE_COUNT. */
+export function homeNotices(notices: Notice[], now: Date = new Date()): Notice[] {
+  return currentNotices(notices, now).slice(0, HOME_NOTICE_COUNT);
 }
 
 export function formatNoticeDate(value: Notice["noticeDate"]): string {

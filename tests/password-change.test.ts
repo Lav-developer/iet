@@ -62,7 +62,7 @@ test("the password form is reachable from the workspace for every role", () => {
   // The dashboard links to it as well.
   assert.match(readFileSync("app/admin/(app)/page.tsx", "utf8"), /<Link href="\/admin\/account" className="link-arrow">Change your password<\/Link>/);
   // The layout still protects the route.
-  assert.match(readFileSync("app/admin/(app)/layout.tsx", "utf8"), /if \(!user\) redirect\("\/admin\/login"\)/);
+  assert.match(readFileSync("app/admin/layout.tsx", "utf8"), /if \(!user\) redirect\("\/admin\/login"\)/);
 });
 
 test("the form validates locally but the server stays authoritative", () => {

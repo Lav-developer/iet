@@ -5,7 +5,7 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { getPrisma } from "@/lib/db";
 import { consumeRateLimit, isSameOrigin, trustedClientIp } from "@/lib/security";
-import { canActOnAccount, resolveDepartmentAssignment } from "@/lib/user-roles";
+import { authorizeAccountCreation, authorizeAccountDeactivation, authorizeAccountUpdate, resolveDepartmentAssignment } from "@/lib/user-roles";
 
 const roleSchema = z.enum(["SUPER_ADMIN", "IET_ADMIN", "DEPARTMENT_ADMIN", "EDITOR"]);
 const departmentIdSchema = z.string().trim().max(200).nullable().optional();
@@ -18,9 +18,15 @@ function ipAddress(request: Request) {
   return trustedClientIp(request);
 }
 
-function permitted(actor: { role: string }, target: { role: string }) {
-  // Shared with the Users screen (lib/user-roles): one rule, not two.
-  return canActOnAccount(actor, target);
+/**
+ * Who may change which account is decided by lib/user-roles (shared with the
+ * Users screen, so the form never offers what the API refuses). Every write
+ * path below evaluates that decision on the *stored* target before it hashes
+ * or writes anything; in particular an IET_ADMIN can change nothing — role,
+ * password, name or status — on a SUPER_ADMIN account.
+ */
+function refusal(decision: { ok: false; status: number; error: string }) {
+  return NextResponse.json({ error: decision.error }, { status: decision.status });
 }
 
 /**
@@ -63,7 +69,8 @@ export async function POST(request: Request) {
     const limit = await consumeRateLimit(request, "admin:users", 30, 10 * 60 * 1000, actor.id);
     if (!limit.allowed) return NextResponse.json({ error: "Too many user changes. Try again shortly." }, { status: 429, headers: { "Retry-After": String(limit.retryAfterSeconds) } });
     const input = createSchema.parse(await request.json());
-    if (actor.role === "IET_ADMIN" && input.role === "SUPER_ADMIN") return NextResponse.json({ error: "IET administrators cannot create super administrators." }, { status: 403 });
+    const decision = authorizeAccountCreation(actor, input.role);
+    if (!decision.ok) return refusal(decision);
     const prisma = getPrisma();
     if (!prisma) return NextResponse.json({ error: "User administration requires PostgreSQL." }, { status: 503 });
     const assignment = await departmentAssignment(input.role, input.departmentId, undefined);
@@ -93,9 +100,9 @@ export async function PATCH(request: Request) {
     if (!prisma) return NextResponse.json({ error: "User administration requires PostgreSQL." }, { status: 503 });
     const target = await prisma.user.findUnique({ where: { id: body.id } });
     if (!target) return NextResponse.json({ error: "User not found." }, { status: 404 });
-    if (!permitted(actor, target)) return NextResponse.json({ error: "You cannot modify this administrator." }, { status: 403 });
-    if (target.id === actor.id && body.data.active === false) return NextResponse.json({ error: "Use sign out instead of deactivating your current account." }, { status: 400 });
-    if (actor.role === "IET_ADMIN" && body.data.role === "SUPER_ADMIN") return NextResponse.json({ error: "IET administrators cannot grant super administrator access." }, { status: 403 });
+    // Authorization runs on the stored account before any hashing or writing.
+    const decision = authorizeAccountUpdate(actor, target, body.data);
+    if (!decision.ok) return refusal(decision);
     const resultingRole = body.data.role || target.role;
     const assignment = await departmentAssignment(resultingRole, body.data.departmentId, target.departmentId);
     if (!assignment.ok) return NextResponse.json({ error: assignment.error }, { status: 400 });
@@ -127,7 +134,8 @@ export async function DELETE(request: Request) {
     if (!prisma) return NextResponse.json({ error: "User administration requires PostgreSQL." }, { status: 503 });
     const target = await prisma.user.findUnique({ where: { id: body.id } });
     if (!target) return NextResponse.json({ error: "User not found." }, { status: 404 });
-    if (!permitted(actor, target) || target.id === actor.id) return NextResponse.json({ error: "You cannot deactivate this account." }, { status: 403 });
+    const decision = authorizeAccountDeactivation(actor, target);
+    if (!decision.ok) return refusal(decision);
     // Deactivation + session invalidation + audit entry are atomic.
     const user = await prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({ where: { id: target.id }, data: { active: false, sessionVersion: { increment: 1 } }, select: { id: true, email: true, name: true, role: true, active: true } });

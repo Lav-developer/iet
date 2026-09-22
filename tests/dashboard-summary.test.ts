@@ -11,7 +11,7 @@ import { getDashboardSummary } from "../lib/store";
 
 test("the dashboard counters cover the four headline entities, in order", async () => {
   const summary = await getDashboardSummary();
-  assert.deepEqual(summary.stats.map((stat) => stat.label), ["Departments", "Programs", "Faculty & staff", "Laboratories"]);
+  assert.deepEqual(summary.stats.map((stat) => stat.label), ["Departments", "Programmes", "Faculty & staff", "Laboratories"]);
   for (const stat of summary.stats) {
     assert.equal(stat.total, stat.published + stat.drafts, `${stat.label}: total is published + draft/review`);
     assert.ok(stat.total >= 0 && stat.published >= 0 && stat.drafts >= 0);
@@ -67,7 +67,7 @@ test("the dashboard only offers the sign-in link when the session really failed"
   const link = page.slice(page.indexOf("Sign in to continue"));
   assert.doesNotMatch(link.slice(0, 200), /^\}: Sign in to continue\./, "the link is not appended to every error");
   // Dashboard content is unchanged.
-  for (const marker of ["Content health at a glance.", "Quick actions", "Platform handover", "admin-stat"]) {
+  for (const marker of ["Content health at a glance.", "Quick actions", "Administration", "admin-stat"]) {
     assert.ok(page.includes(marker), `dashboard still renders ${marker}`);
   }
 });
@@ -94,7 +94,7 @@ test("every admin section keeps its own authentication gate", () => {
     assert.match(source, /requireAdmin\(\)/, `${route} authenticates`);
   }
   // The workspace layout redirects unauthenticated visitors before any page runs.
-  const layout = readFileSync("app/admin/(app)/layout.tsx", "utf8");
+  const layout = readFileSync("app/admin/layout.tsx", "utf8");
   assert.match(layout, /const user = await getSession\(\)/);
   assert.match(layout, /if \(!user\) redirect\("\/admin\/login"\)/);
   // Logout clears the session cookie through the existing endpoint.

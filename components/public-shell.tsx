@@ -48,7 +48,7 @@ function SiteHeader() {
           </div>
         </div>
         <nav id="mobile-navigation" className={`mobile-nav ${open ? "open" : ""}`} aria-label="Mobile navigation">
-          {[...navItems, { href: "/admissions", label: "Admissions" }, { href: "/contact", label: "Contact" }].map((item) => <Link key={item.href} href={item.href} onClick={() => setOpen(false)} aria-current={isCurrent(item.href) ? "page" : undefined}>{item.label}</Link>)}
+          {[...navItems, { href: "/admissions", label: "Admissions" }, { href: "/admissions/fee-structure", label: "Fee structure" }, { href: "/contact", label: "Contact" }].map((item) => <Link key={item.href} href={item.href} onClick={() => setOpen(false)} aria-current={isCurrent(item.href) ? "page" : undefined}>{item.label}</Link>)}
         </nav>
       </header>
     </>
@@ -64,7 +64,7 @@ function SiteFooter() {
           <h2 style={{ color: "white", fontSize: "1.8rem", marginTop: 12 }}>Engineering for an accessible future.</h2>
           <p>Explore IET programmes, departments, people and research. Visit DSMNRU for university notices, examinations, results and student services.</p>
         </div>
-        <div><h3>Explore</h3><ul><li><Link href="/about">About IET</Link></li><li><Link href="/departments">Departments</Link></li><li><Link href="/programs">Programmes</Link></li><li><Link href="/faculty">Faculty directory</Link></li><li><Link href="/laboratories">Laboratories</Link></li><li><Link href="/infrastructure">Infrastructure</Link></li></ul></div>
+        <div><h3>Explore</h3><ul><li><Link href="/about">About IET</Link></li><li><Link href="/departments">Departments</Link></li><li><Link href="/programs">Programmes</Link></li><li><Link href="/admissions">Admissions</Link></li><li><Link href="/admissions/fee-structure">Fee structure</Link></li><li><Link href="/faculty">Faculty directory</Link></li><li><Link href="/laboratories">Laboratories</Link></li><li><Link href="/infrastructure">Infrastructure</Link></li></ul></div>
         <div><h3>Discover</h3><ul><li><Link href="/research">Research</Link></li><li><Link href="/projects">Projects</Link></li><li><Link href="/publications">Publications</Link></li><li><Link href="/events">Events</Link></li><li><Link href="/notices">Notices</Link></li><li><Link href="/organizations">Student organizations</Link></li><li><Link href="/resources">Resources</Link></li><li><Link href="/achievements">Achievements</Link></li><li><Link href="/career">Career &amp; industry</Link></li><li><Link href="/contact">Contact</Link></li></ul></div>
         <div><h3>University services</h3><ul><li><a href="https://dsmru.up.nic.in/" target="_blank" rel="noreferrer">DSMNRU website <ExternalLink size={12} /></a></li><li><a href="https://dsmru.samarth.edu.in/index.php/site/login" target="_blank" rel="noreferrer">Samarth student portal <ExternalLink size={12} /></a></li><li><Link href="/accessibility">Accessibility statement</Link></li><li><Link href="/privacy">Privacy</Link></li></ul></div>
       </div>

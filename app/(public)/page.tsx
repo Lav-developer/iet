@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowUpRight, FlaskConical, GraduationCap, Users, Accessibility, Compass } from "lucide-react";
 import { CountLabel, SectionHeading } from "@/components/ui";
-import { currentNotices, formatNoticeDate } from "@/lib/notices";
+import { HomeNoticeBoard } from "@/components/notice-board";
 import { getSiteData } from "@/lib/store";
 
 export const metadata = {
@@ -13,7 +13,6 @@ export default async function HomePage() {
   const data = await getSiteData();
   const cse = data.departments.find((item) => item.slug === "computer-science-engineering");
   const featuredAreas = data.researchAreas.slice(0, 4);
-  const latestNotices = currentNotices(data.notices).slice(0, 3);
   return (
     <>
       <section className="home-hero">
@@ -78,24 +77,11 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {latestNotices.length > 0 && <section className="section tight">
-        <div className="container">
-          <SectionHeading eyebrow="Notice board" title="Latest notices" description="Official notices published by IET-DSMNRU." href="/notices" linkLabel="View all notices" />
-          <div className="home-notices">
-            <ul className="home-notice-list">
-              {latestNotices.map((notice) => <li key={notice.id}>
-                <Link href={`/notices/${notice.slug}`}>{notice.title}</Link>
-                <time dateTime={new Date(notice.noticeDate).toISOString()}>{formatNoticeDate(notice.noticeDate)}</time>
-              </li>)}
-            </ul>
-            <Link className="button secondary" href="/notices">View notice board</Link>
-          </div>
-        </div>
-      </section>}
+      <HomeNoticeBoard notices={data.notices} />
 
       <section className="section tight soft">
         <div className="container" style={{ display: "flex", justifyContent: "space-between", gap: 30, alignItems: "center", flexWrap: "wrap" }}>
-          <div><div className="eyebrow">Need an official university service?</div><h2 style={{ marginTop: 10 }}>University services</h2><p className="lead" style={{ fontSize: ".95rem" }}>Find admissions, examinations, results, university notices and student services.</p></div><Link href="/resources" className="button copper">View official links <Compass size={17} /></Link>
+          <div><div className="eyebrow">Need an official university service?</div><h2 style={{ marginTop: 10 }}>University services</h2><p className="lead" style={{ fontSize: ".95rem" }}>Find admissions, examinations, results, university notices and student services.</p></div><div className="cta-row"><Link href="/resources" className="button copper">View official links <Compass size={17} /></Link><Link href="/admissions/fee-structure" className="button secondary">Fee structure</Link></div>
         </div>
       </section>
     </>

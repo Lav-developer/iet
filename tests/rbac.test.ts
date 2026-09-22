@@ -25,20 +25,31 @@ test("SUPER_ADMIN and IET_ADMIN: unrestricted read/write/delete on every entity"
   }
 });
 
-test("EDITOR: reads everything, edits only unpublished records, never deletes, never publishes", () => {
+test("EDITOR: reads everything, edits drafts, reviews and published records, never deletes, never changes publication state", () => {
   assert.equal(canAccess(EDITOR, "programs", "read"), true);
   assert.equal(canAccess(EDITOR, "programs", "write", undefined, ownCurrent("DRAFT")), true);
   assert.equal(canAccess(EDITOR, "programs", "write", undefined, ownCurrent("REVIEW")), true);
   assert.equal(canAccess(EDITOR, "programs", "write", { status: "REVIEW" }, ownCurrent("DRAFT")), true);
-  // Cannot touch published or archived records.
-  assert.equal(canAccess(EDITOR, "programs", "write", undefined, ownCurrent("PUBLISHED")), false);
+  // Editing authority is separate from publishing authority: a published
+  // record stays editable (the change goes live), and saving it keeps it
+  // published.
+  assert.equal(canAccess(EDITOR, "programs", "write", undefined, ownCurrent("PUBLISHED")), true, "edit a published record");
+  assert.equal(canAccess(EDITOR, "programs", "write", { status: "PUBLISHED", title: "Updated" }, ownCurrent("PUBLISHED")), true, "save a published record as published");
+  // Archived records are read-only until an institute administrator restores them.
   assert.equal(canAccess(EDITOR, "programs", "write", undefined, ownCurrent("ARCHIVED")), false);
-  // Cannot set a record to PUBLISHED/ARCHIVED, even a draft.
-  assert.equal(canAccess(EDITOR, "programs", "write", { status: "PUBLISHED" }, ownCurrent("DRAFT")), false);
-  assert.equal(canAccess(EDITOR, "programs", "write", { status: "ARCHIVED" }, ownCurrent("DRAFT")), false);
+  // Publishes within the editorial scope (directly, review optional)…
+  assert.equal(canAccess(EDITOR, "programs", "write", { status: "PUBLISHED" }, ownCurrent("DRAFT")), true, "publish a draft");
+  assert.equal(canAccess(EDITOR, "programs", "write", { status: "PUBLISHED" }, ownCurrent("REVIEW")), true, "publish from review");
+  assert.equal(canAccess(EDITOR, "programs", "write", { status: "PUBLISHED" }), true, "create a record as published");
+  // …but does not unpublish, archive or restore.
+  assert.equal(canAccess(EDITOR, "programs", "write", { status: "ARCHIVED" }, ownCurrent("DRAFT")), false, "archive");
+  assert.equal(canAccess(EDITOR, "programs", "write", { status: "ARCHIVED" }, ownCurrent("PUBLISHED")), false, "archive a live record");
+  assert.equal(canAccess(EDITOR, "programs", "write", { status: "DRAFT" }, ownCurrent("PUBLISHED")), false, "unpublish");
+  assert.equal(canAccess(EDITOR, "programs", "write", { status: "DRAFT" }, ownCurrent("ARCHIVED")), false, "restore");
   // Cannot delete anything.
   assert.equal(canAccess(EDITOR, "programs", "delete", undefined, ownCurrent("DRAFT")), false);
-  // Creates are allowed (must be DRAFT — enforced by the workflow test).
+  assert.equal(canAccess(EDITOR, "programs", "delete", undefined, ownCurrent("PUBLISHED")), false);
+  // Creates are allowed in any department (institution-wide scope).
   assert.equal(canAccess(EDITOR, "programs", "write", { departmentSlug: OTHER }), true);
 });
 
@@ -53,7 +64,7 @@ test("DEPARTMENT_ADMIN without a department: denied everything", () => {
   }
 });
 
-test("DEPARTMENT_ADMIN: scoped read/write on own department only, drafts only, no delete", () => {
+test("DEPARTMENT_ADMIN: scoped read/write on own department only (published records included), no publishing, no delete", () => {
   // Own department, draft record.
   assert.equal(canAccess(DEPT_OWN, "programs", "read", undefined, ownCurrent("DRAFT"), OWN), true);
   assert.equal(canAccess(DEPT_OWN, "programs", "write", undefined, ownCurrent("DRAFT"), OWN), true);
@@ -67,10 +78,23 @@ test("DEPARTMENT_ADMIN: scoped read/write on own department only, drafts only, n
   assert.equal(canAccess(DEPT_OWN, "programs", "write", { departmentSlug: OTHER }, ownCurrent("DRAFT"), OWN), false, "reassign to another department");
   // A record with no department may be adopted into the assigned department.
   assert.equal(canAccess(DEPT_OWN, "programs", "write", { departmentSlug: OWN }, { id: "p3", status: "DRAFT" }, OWN), true, "adopt departmentless record");
-  // Published records are read-only for department admins.
-  assert.equal(canAccess(DEPT_OWN, "programs", "write", undefined, ownCurrent("PUBLISHED"), OWN), false, "edit published");
-  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "PUBLISHED" }, ownCurrent("REVIEW"), OWN), false, "publish");
-  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "ARCHIVED" }, ownCurrent("PUBLISHED"), OWN), false, "archive");
+  // Published records of the own department stay editable, and the department
+  // administrator holds full publishing authority there: publish, unpublish,
+  // archive and restore — inside the assigned department only.
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", undefined, ownCurrent("PUBLISHED"), OWN), true, "edit published (own department)");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "PUBLISHED", departmentSlug: OWN, title: "Updated" }, ownCurrent("PUBLISHED"), OWN), true, "save published (own department)");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", undefined, otherCurrent("PUBLISHED"), OWN), false, "edit published (other department)");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "PUBLISHED" }, ownCurrent("REVIEW"), OWN), true, "publish");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "PUBLISHED" }, ownCurrent("DRAFT"), OWN), true, "publish a draft");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "PUBLISHED", departmentSlug: OWN }, undefined, OWN), true, "create as published");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "DRAFT" }, ownCurrent("PUBLISHED"), OWN), true, "unpublish");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "ARCHIVED" }, ownCurrent("PUBLISHED"), OWN), true, "archive");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "DRAFT" }, ownCurrent("ARCHIVED"), OWN), true, "restore");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "PUBLISHED" }, otherCurrent("DRAFT"), OWN), false, "publish (other department)");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "PUBLISHED", departmentSlug: OTHER }, undefined, OWN), false, "create as published (other department)");
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "ARCHIVED" }, otherCurrent("PUBLISHED"), OWN), false, "archive (other department)");
+  // Without a resolvable assigned department no publishing authority exists.
+  assert.equal(canAccess(DEPT_OWN, "programs", "write", { status: "PUBLISHED", departmentSlug: OWN }, ownCurrent("DRAFT"), undefined), false, "publish without a resolvable department");
   // Deletion is never allowed.
   assert.equal(canAccess(DEPT_OWN, "programs", "delete", undefined, ownCurrent("DRAFT"), OWN), false, "delete");
 });
